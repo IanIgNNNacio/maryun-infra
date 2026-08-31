@@ -1,0 +1,11 @@
+# Agente de metricas de maryun01. Marca al hub por websocket saliente:
+# no abre ningun puerto a la escucha.
+HUB_URL=http://10.8.0.1:8090
+TOKEN=<en /srv/secrets/monitoreo.env>
+KEY=<en /srv/secrets/monitoreo.env>
+
+# Estadisticas de contenedores por el proxy de solo lectura, nunca por el socket.
+DOCKER_HOST=tcp://127.0.0.1:2375
+
+# Sistemas de archivos a vigilar, ademas de la raiz.
+EXTRA_FILESYSTEMS=/srv,/var/lib/docker

@@ -1,0 +1,12 @@
+[Unit]
+Description=Dispara el respaldo diario de maryun01
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+# Evita que todos los servidores del mundo golpeen OVH al mismo minuto.
+RandomizedDelaySec=20m
+# Si el servidor estuvo apagado a esa hora, corre al encender.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

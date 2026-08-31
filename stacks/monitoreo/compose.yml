@@ -1,0 +1,84 @@
+# Monitoreo de maryun01.
+#
+# Dos piezas que responden preguntas distintas:
+#   Uptime Kuma  — "responde el ERP?"  Chequea endpoints y avisa cuando dejan de responder.
+#   Beszel       — "aguanta el servidor?"  CPU, RAM, disco y contenedores, con alertas de saturacion.
+#
+# Ninguna se publica a internet: ambas escuchan solo en la VPN (10.8.0.1).
+#
+# Sobre el acceso a Docker: NINGUN contenedor recibe /var/run/docker.sock.
+# Montar el socket, aunque sea de solo lectura, entrega root del servidor: quien
+# lo alcanza puede crear un contenedor privilegiado. En su lugar va un proxy que
+# solo deja pasar consultas de lectura sobre contenedores y bloquea todo POST.
+
+name: monitoreo
+
+networks:
+  # Red aislada entre el proxy y quienes lo consultan.
+  socket:
+    name: monitoreo-socket
+  # Redes existentes, para poder chequear los servicios por su nombre.
+  coolify:
+    external: true
+  data:
+    external: true
+
+services:
+  # ── el portero del socket de Docker ────────────────────────────────────────
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: monitoreo-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1        # listar contenedores y leer sus estadisticas
+      INFO: 1              # datos generales del daemon
+      PING: 1
+      VERSION: 1
+      POST: 0              # nada que modifique estado
+      EXEC: 0              # sin ejecutar comandos dentro de contenedores
+      IMAGES: 0
+      VOLUMES: 0
+      NETWORKS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      NODES: 0
+      PLUGINS: 0
+      SESSION: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Solo local: lo consume el agente de Beszel, que corre en el propio host.
+    ports:
+      - "127.0.0.1:2375:2375"
+    networks: [socket]
+    security_opt: [no-new-privileges:true]
+
+  # ── responde el ERP? ───────────────────────────────────────────────────────
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "10.8.0.1:3001:3001"
+    volumes:
+      - ./datos/uptime-kuma:/app/data
+    networks: [socket, coolify, data]
+    security_opt: [no-new-privileges:true]
+
+  # ── aguanta el servidor? ───────────────────────────────────────────────────
+  beszel:
+    image: henrygd/beszel:latest
+    container_name: beszel
+    restart: unless-stopped
+    ports:
+      - "10.8.0.1:8090:8090"
+    volumes:
+      - ./datos/beszel:/beszel_data
+    networks: [socket]
+    security_opt: [no-new-privileges:true]

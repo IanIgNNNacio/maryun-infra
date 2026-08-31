@@ -25,49 +25,51 @@ Total actual: ~660 MB por corrida. Retención local de 14 días.
 **Lo que NO cubre:** los adjuntos del ERP. Esos nunca tocan el disco del
 servidor — el ERP los sube directo a Cloudflare R2. Son una capa aparte.
 
-### Capa 3 — la copia fuera del servidor: FALTA
+### Capa 3 — la copia fuera del servidor: HECHA (31-ago-2026)
 
-Hoy los respaldos viven en `/srv/backups`, **en el mismo RAID que los datos**.
-Eso todavía no es un respaldo.
-
-Es cierto que el RAID 1 hace prácticamente imposible perder los datos por fallo
-de disco. Pero un respaldo no existe para eso. Existe para:
-
-- un borrado accidental o un comando mal escrito
-- corrupción por un error de programa
-- ransomware
-- perder el servidor entero (problema de cuenta, incidente en el datacenter,
-  un error durante una reinstalación)
-
-Ninguno de esos lo cubre el RAID.
-
-**Recomendación: OVHcloud Backup Storage.**
+Los respaldos ya no viven solo en el mismo RAID que los datos. `respaldo-externo.sh`
+los empuja al **Backup Storage de OVHcloud** (500 GB incluidos con el servidor),
+**cifrados en origen**.
 
 | | |
 |---|---|
-| Espacio | **500 GB gratis**, incluidos con el servidor dedicado |
-| Protocolos | NFS, FTP, FTPS, CIFS |
-| Seguridad | Acceso restringido por lista de IPs de la cuenta OVH |
-| Activación | Panel OVH → servidor → pestaña *Backup storage* → *Enable* |
+| Destino | `ftpback-bhs5-39.mybackup.ovh.ca` sobre FTPS |
+| Cifrado | capa `crypt` de rclone: contenidos **y nombres de archivo** |
+| Modo | `copy`, nunca `sync` — un borrado local no se propaga |
+| Montaje | ninguno: empuja y se desconecta |
+| Retención | 30 días en destino, 14 en local |
+| Programación | `maryun-respaldo.timer`, 03:15 ± 20 min |
 
-Por qué esta y no Backblaze B2: son 500 GB gratis en vez de 10, no requiere
-cuenta nueva, y ya está pagado. B2 sería más resistente —otro proveedor, otra
-factura— pero su nivel gratuito se agota rápido y hoy no hay datos que lo
-justifiquen.
+Primera corrida verificada: 14 objetos, 692 MB.
 
-**Advertencia importante sobre cómo montarlo:** no dejar el NFS montado de forma
-permanente con escritura. Un servidor comprometido borraría los respaldos junto
-con los datos. Montarlo solo durante la ventana de respaldo, o empujar por FTPS.
+**Sin la clave de cifrado este respaldo es irrecuperable.** Vive en
+`/srv/secrets/RECUPERACION.txt` y está **excluida del respaldo a propósito** —
+una llave no se guarda dentro de lo que abre. Ian debe tener una copia fuera del
+servidor.
 
-**Límite honesto:** sigue siendo OVH. Si se pierde la cuenta, se pierden las dos
-cosas. Cuando haya datos que de verdad importen, conviene una tercera copia en
-otro proveedor.
+Detalles que costaron y conviene no reaprender:
 
-### Capa 4 — verificación: FALTA
+- El nombre del servidor FTPS es **específico de la región**: `.mybackup.ovh.ca`
+  para Canadá, no `.ovh.net`.
+- OVH admite **tres conexiones simultáneas**. No basta bajar `--transfers`:
+  rclone abre además 8 verificadores y su propio grupo de conexiones. Hay que
+  limitar los tres (`concurrency=2`, `--transfers 2`, `--checkers 1`). Al
+  excederlo el servidor responde en texto plano y rclone reporta
+  `tls: first record does not look like a TLS handshake`, que apunta al sitio
+  equivocado.
 
-Una restauración de prueba automática. Es la única capa que demuestra que las
-otras tres sirven, y la que casi nadie hace. Sin ella, un respaldo corrupto pasa
-inadvertido hasta el día que se necesita.
+### Capa 4 — verificación: PARCIAL
+
+**Hecho:** cada corrida ejecuta `rclone check` (compara tamaños y sumas) y una
+prueba manual de recuperación completa confirmó el ciclo de ida y vuelta —
+archivo bajado del destino cifrado, SHA-256 idéntico al del manifiesto, `tar`
+válido con 5.238 archivos dentro.
+
+**Falta:** que esa prueba sea **automática y periódica**. Hoy `check` demuestra
+que los bytes llegaron; no que un volcado de PostgreSQL restaure. La prueba de
+verdad es levantar un contenedor desechable, restaurar el volcado más reciente y
+contar filas. Es la capa que casi nadie hace y la única que demuestra que las
+otras tres sirven.
 
 ### Respaldo de adjuntos
 
@@ -118,21 +120,20 @@ datos reales**.
 
 ---
 
-## 3. Monitoreo y alertas: FALTA
+## 3. Monitoreo y alertas: HECHO (31-ago-2026), falta el canal de avisos
 
-Hoy si el servidor se satura o un contenedor se cae, nadie se entera.
+Instalados **Uptime Kuma** (13 monitores) y **Beszel** (métricas + 5 reglas de
+saturación), ambos solo por VPN. Detalle completo en
+[monitoreo.md](monitoreo.md).
 
-**Propuesta:**
+**Lo que queda: por dónde llegan los avisos.** Las reglas están puestas pero sin
+canal de salida no notifican a nadie. Y hay una limitación que ningún canal
+resuelve por sí solo:
 
-| Herramienta | Para qué |
-|---|---|
-| **Uptime Kuma** | Chequeo externo del ERP y avisos (WhatsApp, correo) cuando algo deja de responder |
-| **Beszel** o **Netdata** | CPU, RAM, disco y estado de contenedores, con alertas de saturación |
+> Uptime Kuma y Beszel corren **dentro** de maryun01. Si el servidor entero se
+> cae, el monitoreo se cae con él y nadie avisa.
 
-Grafana con Prometheus solo si se quiere histórico largo; para el objetivo de
-"que el ERP no se caiga" las dos de arriba alcanzan.
-
-Ambas deben quedar **solo por VPN**, como el resto.
+Cubrirlo exige algo **fuera** del servidor que espere una señal periódica.
 
 ---
 

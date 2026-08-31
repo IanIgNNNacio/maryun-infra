@@ -1,0 +1,12 @@
+[Unit]
+Description=Respaldo diario de maryun01 (local + copia cifrada a OVH)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/respaldo-diario.sh
+# Un respaldo no debe competir con el ERP por CPU ni por disco.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h
