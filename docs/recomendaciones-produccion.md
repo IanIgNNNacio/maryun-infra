@@ -126,14 +126,52 @@ Instalados **Uptime Kuma** (13 monitores) y **Beszel** (métricas + 5 reglas de
 saturación), ambos solo por VPN. Detalle completo en
 [monitoreo.md](monitoreo.md).
 
-**Lo que queda: por dónde llegan los avisos.** Las reglas están puestas pero sin
-canal de salida no notifican a nadie. Y hay una limitación que ningún canal
-resuelve por sí solo:
+### ⚠️ Hallazgo: el correo del ERP NO funciona
+
+Al conectar las alertas por correo apareció un problema que **va más allá del
+monitoreo**:
+
+```
+550 "The maryun.cl domain is not verified.
+     Please, add and verify your domain on https://resend.com/domains"
+```
+
+Confirmado por dos vías: la API de Resend devuelve `{"data":[]}` — **cero
+dominios en la cuenta** — y el servidor SMTP lo rechaza explícitamente.
+
+**Consecuencia para el ERP:** `domain/mail/resend.ts` envía desde
+`RESEND_FROM` = `ERP Maryun <no-reply@maryun.cl>`, que Resend rechaza. O sea
+que **la casilla, los correos enviados y los recordatorios de cobranza no
+pueden salir**. El código está bien hecho —`sendViaResend` nunca lanza y
+devuelve el motivo para pintarlo en la UI—, así que no falla en silencio, pero
+tampoco envía.
+
+**Dato adicional:** la cuenta de Resend es de **`felipe.delamaza@maryun.cl`**,
+no de Ian. Su modo de prueba solo permite enviar a esa casilla.
+
+**Arreglo:** verificar `maryun.cl` en Resend (agregar el dominio y publicar sus
+registros SPF/DKIM en Cloudflare). Un solo paso arregla **las alertas y el
+correo del ERP a la vez**. Decidir además si la cuenta debe seguir siendo la de
+Felipe o si conviene una propia del ERP.
+
+### Estado del canal de avisos
+
+| Pieza | Estado |
+|---|---|
+| Uptime Kuma → canal "Correo" | configurado, **13 de 13 monitores enganchados** |
+| Beszel → SMTP de Resend | configurado |
+| Entrega real | **bloqueada** hasta verificar el dominio |
+
+Mientras tanto, las alertas se ven en los paneles pero **no llegan a nadie**.
+Un canal que no depende de dominio verificado (Telegram, ntfy) sirve de puente.
+
+### El punto ciego que ningún canal resuelve
 
 > Uptime Kuma y Beszel corren **dentro** de maryun01. Si el servidor entero se
 > cae, el monitoreo se cae con él y nadie avisa.
 
-Cubrirlo exige algo **fuera** del servidor que espere una señal periódica.
+Cubrirlo exige algo **fuera** del servidor que espere una señal periódica
+(Healthchecks.io u otro).
 
 ---
 
