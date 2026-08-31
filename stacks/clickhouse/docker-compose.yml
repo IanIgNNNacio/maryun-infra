@@ -15,6 +15,8 @@ services:
     volumes:
       - /srv/stacks/clickhouse/data:/var/lib/clickhouse
       - /srv/stacks/clickhouse/logs:/var/log/clickhouse-server
+      # Destino del comando BACKUP nativo
+      - /srv/backups/clickhouse:/backups
       - /srv/stacks/clickhouse/config.d:/etc/clickhouse-server/config.d:ro
       - /srv/stacks/clickhouse/users.d:/etc/clickhouse-server/users.d:ro
 
