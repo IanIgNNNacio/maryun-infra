@@ -1,0 +1,46 @@
+name: mcp-mage
+
+# En el VPS viejo este archivo tenia el correo, la contrasena y la clave de API
+# de Mage en TEXTO PLANO, y estaba en modo 644 — legible por el proceso que
+# comprometio el servidor. Ahora todo viene de /srv/secrets/mcp-mage.env (0640).
+
+services:
+  mcp-mage:
+    build: .
+    image: mcp-mage:1
+    container_name: mcp-mage
+    restart: unless-stopped
+
+    ports:
+      - "10.8.0.1:3333:3000"
+
+    environment:
+      MAGE_EMAIL: ${MAGE_EMAIL}
+      MAGE_PASSWORD: ${MAGE_PASSWORD}
+      MAGE_API_URL: "http://mage:6789/api/"
+      MAGE_API_KEY: ${MAGE_API_KEY}
+      MAGE_API_TOKEN: ""
+      MCP_TRANSPORT: "streamable-http"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "3000"
+
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('127.0.0.1',3000),5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+    deploy:
+      resources: { limits: { memory: 512M } }
+
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+    networks: [data]
+
+networks:
+  data:
+    name: data
+    external: true

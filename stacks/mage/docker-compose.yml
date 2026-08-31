@@ -1,0 +1,87 @@
+name: mage
+
+services:
+  mage-db:
+    image: postgres:16-alpine
+    container_name: mage-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MAGE_PG_USER}
+      POSTGRES_PASSWORD: ${MAGE_PG_PASSWORD}
+      POSTGRES_DB: ${MAGE_PG_DB}
+      TZ: ${TZ}
+    volumes:
+      - /srv/stacks/mage/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MAGE_PG_USER} -d ${MAGE_PG_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    networks: [data]
+
+  mage:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MAGE_TAG: ${MAGE_TAG}
+    image: mageai-custom:${MAGE_TAG}
+    container_name: mage
+    restart: unless-stopped
+    command: ["/app/run_app.sh", "mage", "start", "${MAGE_PROJECT}"]
+
+    # Solo por la VPN. Sin Traefik: Mage OSS no tiene autenticacion robusta
+    # y no tiene por que estar en internet.
+    ports:
+      - "10.8.0.1:6789:6789"
+
+    environment:
+      TZ: ${TZ}
+      PORT: ${PORT}
+      MAGE_DATABASE_CONNECTION_URL: postgresql+psycopg2://${MAGE_PG_USER}:${MAGE_PG_PASSWORD}@${MAGE_PG_HOST}:${MAGE_PG_PORT}/${MAGE_PG_DB}
+
+    depends_on:
+      mage-db:
+        condition: service_healthy
+
+    volumes:
+      # Codigo del proyecto: esto es lo precioso, lo unico que no esta en git.
+      - /srv/stacks/mage/project:/home/src
+      # Cache de corridas (.logs y .variables): desechable y regenerable.
+      # En el VPS viejo crecio hasta 71 GB sin que nada lo purgara.
+      - /srv/stacks/mage/data:/home/src/mage_data
+
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${PORT} >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+    networks: [data]
+
+networks:
+  data:
+    name: data
+    external: true

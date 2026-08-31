@@ -1,0 +1,69 @@
+name: mysis-tunnel
+
+# Tunel hacia MySis (MariaDB 10.6 en la VM de Azure vmmysis, 20.153.168.52).
+#
+# Dos caminos de acceso, ninguno expuesto a internet:
+#   1. Mage lo alcanza como "mysis_tunnel:3306" por la red Docker "data".
+#      Por eso el contenedor conserva ese nombre: el io_config.yaml no cambia.
+#   2. Ian lo alcanza como "10.8.0.1:3307" por WireGuard, sin levantar ningun
+#      tunel SSH a mano. En DBeaver basta cambiar el host de la conexion
+#      mryn_data_mcp de 127.0.0.1 a 10.8.0.1.
+
+services:
+  mysis_tunnel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mysis-tunnel:1
+    container_name: mysis_tunnel
+    hostname: mysis_tunnel
+    restart: unless-stopped
+
+    # Solo por la VPN. El "-L 0.0.0.0:3306" del comando es el bind DENTRO del
+    # contenedor y debe quedarse asi para que el mapeo de Docker funcione;
+    # quien restringe el acceso es esta linea.
+    ports:
+      - "10.8.0.1:3307:3306"
+
+    volumes:
+      - /srv/secrets/mysis-ssh:/ssh:ro
+
+    command:
+      - "-i"
+      - "/ssh/vmmysis_key.pem"
+      - "-o"
+      - "StrictHostKeyChecking=yes"
+      - "-o"
+      - "UserKnownHostsFile=/ssh/known_hosts"
+      - "-o"
+      - "ExitOnForwardFailure=yes"
+      - "-o"
+      - "ServerAliveInterval=30"
+      - "-o"
+      - "ServerAliveCountMax=3"
+      - "-L"
+      - "0.0.0.0:3306:127.0.0.1:3306"
+      - "mrootuser@20.153.168.52"
+
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3306 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+    networks: [data]
+
+networks:
+  data:
+    name: data
+    external: true

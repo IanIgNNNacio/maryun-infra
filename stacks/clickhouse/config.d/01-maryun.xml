@@ -1,0 +1,53 @@
+<clickhouse>
+    <!-- Escucha dentro del contenedor. La restriccion a la VPN la aplica
+         el binding de Docker (10.8.0.1) mas la cadena DOCKER-USER. -->
+    <listen_host>0.0.0.0</listen_host>
+
+    <!-- En el VPS viejo los logs llegaron a 1.4 GB sin control. -->
+    <logger>
+        <level>warning</level>
+        <size>100M</size>
+        <count>3</count>
+    </logger>
+
+    <!-- Y las tablas system.* a 2.7 GB (325 millones de filas de log).
+         Con TTL se purgan solas. -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
+    </query_log>
+
+    <part_log>
+        <database>system</database>
+        <table>part_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+    </part_log>
+
+    <metric_log>
+        <database>system</database>
+        <table>metric_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+    </metric_log>
+
+    <trace_log>
+        <database>system</database>
+        <table>trace_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </trace_log>
+
+    <asynchronous_metric_log>
+        <database>system</database>
+        <table>asynchronous_metric_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </asynchronous_metric_log>
+
+    <!-- Estas dos son las que mas crecen y casi nunca se consultan. -->
+    <query_thread_log remove="1"/>
+    <text_log remove="1"/>
+</clickhouse>

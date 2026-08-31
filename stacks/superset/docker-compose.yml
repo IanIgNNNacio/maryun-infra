@@ -1,0 +1,159 @@
+name: superset
+
+# Cambios respecto del VPS viejo:
+#   - Sin el servicio "shots" (Ian confirmo que ya no se usa).
+#   - Sin etiquetas de Traefik: todo por VPN, nada publico.
+#   - Healthchecks propios para worker, beat y mcp. Los del VPS viejo heredaban
+#     el de Superset (curl a localhost:8088), y esos contenedores no levantan
+#     servidor web -> llevaban semanas en rojo sin que nada estuviera roto.
+#   - Limites de memoria y rotacion de logs en todos.
+#   - Datos por bind mount bajo /srv, no en volumenes con nombre.
+#
+# SUPERSET_SECRET_KEY se conserva del VPS viejo A PROPOSITO: cifra las
+# contrasenas de las conexiones guardadas en la base de metadatos. Se rota
+# DESPUES de migrar, con "superset re-encrypt-secrets".
+
+x-superset-common: &superset-common
+  image: superset-custom:6.1.0
+  environment: &superset-env
+    SUPERSET_ENV: production
+    SUPERSET_SECRET: ${SUPERSET_SECRET_KEY}
+    SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_DB: ${POSTGRES_DB}
+    TZ: ${TZ}
+  env_file: [.env]
+  volumes:
+    - /srv/stacks/superset/pythonpath:/app/pythonpath
+    - /srv/stacks/superset/docker/requirements-local.txt:/app/docker/requirements-local.txt:ro
+  logging:
+    driver: json-file
+    options: { max-size: "50m", max-file: "3" }
+  networks: [data]
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: superset-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ}
+    volumes:
+      - /srv/stacks/superset/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources: { limits: { memory: 2G } }
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    networks: [data]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: superset-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - /srv/stacks/superset/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources: { limits: { memory: 512M } }
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    networks: [data]
+    restart: unless-stopped
+
+  superset:
+    <<: *superset-common
+    container_name: superset
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.superset
+    environment:
+      <<: *superset-env
+      SUPERSET_LOAD_EXAMPLES: "no"
+    ports:
+      - "10.8.0.1:8088:8088"
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8088/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+    deploy:
+      resources: { limits: { memory: 6G } }
+
+  superset-worker:
+    <<: *superset-common
+    container_name: superset-worker
+    command: ["celery", "-A", "superset.tasks.celery_app:app", "worker", "-O", "fair", "-l", "INFO"]
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # Un worker de Celery no sirve HTTP: se le pregunta a Celery si responde.
+    healthcheck:
+      test: ["CMD-SHELL", "/app/.venv/bin/celery -A superset.tasks.celery_app:app inspect ping -t 20 >/dev/null 2>&1 || exit 1"]
+      interval: 60s
+      timeout: 40s
+      retries: 3
+      start_period: 150s
+    deploy:
+      resources: { limits: { memory: 4G } }
+
+  superset-worker-beat:
+    <<: *superset-common
+    container_name: superset-beat
+    command: ["celery", "-A", "superset.tasks.celery_app:app", "beat", "-l", "INFO", "-s", "/tmp/celerybeat-schedule"]
+    working_dir: /tmp
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # El beat es un unico proceso planificador: basta comprobar que vive.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources: { limits: { memory: 1G } }
+
+  mcp:
+    <<: *superset-common
+    container_name: superset-mcp
+    command: ["superset", "mcp", "run", "--host", "0.0.0.0", "--port", "5008"]
+    ports:
+      - "10.8.0.1:5008:5008"
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # Comprobacion TCP: el endpoint MCP no expone /health.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('127.0.0.1',5008),5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources: { limits: { memory: 2G } }
+
+networks:
+  data:
+    name: data
+    external: true

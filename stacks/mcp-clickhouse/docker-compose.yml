@@ -1,0 +1,43 @@
+name: mcp-clickhouse
+
+# En el VPS viejo usaba network_mode: "host", por eso su puerto 3334 aparecia
+# en 0.0.0.0. Aqui va en la red "data" y publica solo en la VPN.
+# Usa el usuario 'mcp' de ClickHouse, que es de SOLO LECTURA.
+
+services:
+  clickhouse-mcp:
+    build: .
+    image: mcp-clickhouse:1
+    container_name: clickhouse-mcp
+    restart: unless-stopped
+
+    ports:
+      - "10.8.0.1:3334:3334"
+
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: ${CLICKHOUSE_MCP_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_MCP_PASSWORD}
+      CLICKHOUSE_DATABASE: dwh
+
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('127.0.0.1',3334),5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+    deploy:
+      resources: { limits: { memory: 512M } }
+
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+    networks: [data]
+
+networks:
+  data:
+    name: data
+    external: true

@@ -1,0 +1,41 @@
+# NADA de /srv/secrets entra aqui. Este repositorio describe COMO se levanta
+# el servidor, no con que llaves. Las reglas de abajo son deliberadamente
+# agresivas: es preferible que se escape un archivo inocente a que se suba uno
+# con credenciales.
+
+# Secretos por nombre
+*.env
+!*.env.ejemplo
+!*.env.plantilla
+.env
+.env.*
+*secret*
+*credential*
+*password*
+
+# Llaves
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*deploy-key*
+*.gpg
+*.asc
+
+# Volcados de base de datos y respaldos
+*.dump
+*.sql.gz
+*.tar.gz
+*.tgz
+*.bak
+backups/
+respaldos/
+
+# Ruido
+*.log
+*.tmp
+.DS_Store
+node_modules/
+__pycache__/

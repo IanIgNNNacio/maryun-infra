@@ -1,0 +1,79 @@
+name: maryun-erp-db
+
+# La base del ERP vive FUERA de Coolify a proposito: es el activo mas valioso
+# del sistema y su ciclo de vida debe ser explicito. El respaldo con PITR que
+# hay que construir (WAL archiving) necesita control directo sobre el motor.
+# Las aplicaciones (produccion y preview) si van en Coolify.
+#
+# Aloja dos bases:
+#   maryun_erp          -> produccion
+#   maryun_erp_preview  -> preview
+
+services:
+  db:
+    image: postgres:18.6
+    container_name: maryun-erp-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ}
+
+    # Solo por la VPN: para pgAdmin/DBeaver y para operaciones manuales.
+    # Las aplicaciones la alcanzan por la red Docker con el nombre "maryun-erp-db".
+    ports:
+      - "10.8.0.1:5433:5432"
+
+    volumes:
+      - /srv/stacks/maryun-erp/db:/var/lib/postgresql
+
+    # Ajustes conservadores. La base entera son 209 MB, asi que cabe holgada en
+    # memoria; lo que se busca es evitar los valores por defecto, que asumen un
+    # servidor diminuto.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "effective_cache_size=6GB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "log_min_duration_statement=2000"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+    networks: [data, coolify]
+
+networks:
+  data:
+    name: data
+    external: true
+  # Red de Coolify: las aplicaciones que gestiona viven ahi y necesitan
+  # alcanzar esta base por su nombre de contenedor.
+  coolify:
+    name: coolify
+    external: true
