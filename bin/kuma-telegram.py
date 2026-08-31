@@ -16,18 +16,24 @@ def ids_de(monitor):
 a = UptimeKumaApi("http://uptime-kuma:3001", timeout=60)
 a.login(os.environ["KUMA_USUARIO"], os.environ["KUMA_PASS"])
 
-if any(n["name"] == "Telegram" for n in a.get_notifications()):
-    print("  el canal de Telegram ya existia")
+CAMPOS = dict(
+    name="Telegram",
+    type=NotificationType.TELEGRAM,
+    isDefault=True,
+    telegramBotToken=os.environ["TELEGRAM_TOKEN"],
+    telegramChatID=os.environ["TELEGRAM_CHAT"],
+    telegramSendSilently=False,
+)
+
+previo = next((n for n in a.get_notifications() if n["name"] == "Telegram"), None)
+if previo:
+    # Se actualiza en vez de saltarse: al cambiar de conversacion privada a
+    # grupo, el canal existe pero apunta al destino viejo. Saltarlo dejaria los
+    # avisos yendo al lugar equivocado sin dar ningun error.
+    a.edit_notification(previo["id"], **CAMPOS)
+    print(f"  canal de Telegram actualizado -> {os.environ['TELEGRAM_CHAT']}")
 else:
-    a.add_notification(
-        name="Telegram",
-        type=NotificationType.TELEGRAM,
-        isDefault=True,
-        applyExisting=True,
-        telegramBotToken=os.environ["TELEGRAM_TOKEN"],
-        telegramChatID=os.environ["TELEGRAM_CHAT"],
-        telegramSendSilently=False,
-    )
+    a.add_notification(applyExisting=True, **CAMPOS)
     print("  canal de Telegram creado")
 
 # applyExisting SI funciona, pero tarda en propagarse: consultado enseguida

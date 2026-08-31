@@ -10,11 +10,24 @@
 # shell. Un token de bot permite escribir como ese bot: es una credencial.
 #
 # Uso:  sudo /srv/bin/configurar-telegram.sh
+#       sudo /srv/bin/configurar-telegram.sh --cambiar-chat
+#
+# --cambiar-chat conserva el token y solo vuelve a elegir el destino. Sirve
+# para pasar de una conversacion privada a un grupo, o cuando Telegram
+# convierte un grupo en supergrupo y le cambia el identificador.
 
 set -uo pipefail
 
 SECRETOS=/srv/secrets/monitoreo.env
 API=https://api.telegram.org
+CAMBIAR_CHAT=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --cambiar-chat) CAMBIAR_CHAT=1; shift;;
+        *) echo "opcion desconocida: $1"; exit 2;;
+    esac
+done
 
 [ "$(id -u)" -eq 0 ] || { echo "Ejecutalo con sudo."; exit 1; }
 [ -r "$SECRETOS" ] || { echo "Falta $SECRETOS"; exit 1; }
@@ -23,6 +36,10 @@ API=https://api.telegram.org
 if grep -q '^TELEGRAM_TOKEN=' "$SECRETOS" 2>/dev/null; then
     echo "Ya hay un token guardado: se reutiliza."
     . "$SECRETOS"
+    if [ "$CAMBIAR_CHAT" -eq 1 ]; then
+        echo "Se elegira un destino nuevo."
+        TELEGRAM_CHAT=""
+    fi
 else
     echo "Pega el token que te dio BotFather (no se vera al escribir):"
     read -r -s TELEGRAM_TOKEN
@@ -43,42 +60,58 @@ fi
 echo "  bot verificado: @$BOT"
 
 # ────────────────────────────────────────────── 2. a que conversacion escribe ──
+#
+# Puede ser una conversacion privada o un GRUPO. Un grupo es mejor para un
+# equipo: los avisos no dependen de que una sola persona los vea.
+#
+# Para una privada: escribele cualquier cosa al bot.
+# Para un grupo:    agrega el bot al grupo. Si no aparece, escribe ahi
+#                   /start@<usuario_del_bot> — con la privacidad activada
+#                   (lo normal) el bot solo ve los mensajes dirigidos a el.
+#
+# No se toma "la ultima conversacion": si existen las dos, elegir mal manda los
+# avisos al lugar equivocado sin dar ningun error. Se muestran y se elige.
 if [ -z "${TELEGRAM_CHAT:-}" ]; then
     echo
-    echo "=== buscando tu conversacion ==="
-    echo "  Si aun no le escribiste al bot, hazlo AHORA desde Telegram:"
-    echo "  busca @$BOT, pulsa Iniciar y mandale cualquier mensaje."
-    echo "  Un bot no puede escribir primero: necesita que tu abras la conversacion."
-    echo
+    echo "=== buscando conversaciones ==="
+    echo "  Si aun no lo hiciste, hazlo AHORA desde Telegram:"
+    echo "    privado -> busca @$BOT, pulsa Iniciar y mandale un mensaje"
+    echo "    grupo   -> agrega @$BOT al grupo"
+    echo "  Un bot no puede escribir primero: necesita que tu abras la puerta."
+
     for intento in 1 2 3 4 5 6; do
-        TELEGRAM_CHAT="$(curl -s --max-time 25 "$API/bot$TELEGRAM_TOKEN/getUpdates" \
-          | python3 -c 'import sys, json
-d = json.load(sys.stdin)
-ids = [u["message"]["chat"]["id"] for u in d.get("result", []) if "message" in u]
-print(ids[-1] if ids else "")' 2>/dev/null)"
-        [ -n "$TELEGRAM_CHAT" ] && break
-        echo "  esperando tu mensaje... ($intento/6)"
+        TELEGRAM_CHAT="$(TELEGRAM_TOKEN="$TELEGRAM_TOKEN" \
+                         python3 /srv/bin/telegram-elegir-chat.py)" && break
+        echo "  esperando... ($intento/6)"
         sleep 10
     done
-    if [ -z "$TELEGRAM_CHAT" ]; then
-        echo "  No llego ningun mensaje. Escribele al bot y vuelve a ejecutar esto."
+    if [ -z "${TELEGRAM_CHAT:-}" ]; then
+        echo "  No aparecio ninguna conversacion. Vuelve a ejecutar esto."
         exit 1
     fi
 fi
-echo "  conversacion: $TELEGRAM_CHAT"
+echo "  conversacion elegida: $TELEGRAM_CHAT"
 
 # ──────────────────────────────────────────────────────────── 3. guardar ──
-if ! grep -q '^TELEGRAM_TOKEN=' "$SECRETOS" 2>/dev/null; then
+if grep -q '^TELEGRAM_TOKEN=' "$SECRETOS" 2>/dev/null; then
+    # Ya existia: solo se actualiza el destino, que es lo unico que pudo cambiar.
+    if grep -q '^TELEGRAM_CHAT=' "$SECRETOS"; then
+        sed -i "s|^TELEGRAM_CHAT=.*|TELEGRAM_CHAT=$TELEGRAM_CHAT|" "$SECRETOS"
+    else
+        echo "TELEGRAM_CHAT=$TELEGRAM_CHAT" >> "$SECRETOS"
+    fi
+    echo "  destino actualizado en $SECRETOS"
+else
     {
       echo
       echo "# Canal puente de avisos: Telegram. No depende de dominio verificado."
       echo "TELEGRAM_TOKEN=$TELEGRAM_TOKEN"
       echo "TELEGRAM_CHAT=$TELEGRAM_CHAT"
     } >> "$SECRETOS"
-    chmod 0640 "$SECRETOS"
-    chown root:maryun "$SECRETOS"
     echo "  guardado en $SECRETOS"
 fi
+chmod 0640 "$SECRETOS"
+chown root:maryun "$SECRETOS"
 
 # ───────────────────────────────────── 4. prueba real, no solo configuracion ──
 echo

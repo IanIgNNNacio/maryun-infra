@@ -105,6 +105,50 @@ journalctl -u maryun-respaldo.service -n 50
 
 ---
 
+## Canal de avisos
+
+| Canal | Estado |
+|---|---|
+| Correo (SMTP de Resend) | configurado, **bloqueado**: `maryun.cl` no está verificado en Resend |
+| Telegram | canal puente, no depende de dominio verificado |
+
+```bash
+sudo /srv/bin/configurar-telegram.sh                  # primera vez
+sudo /srv/bin/configurar-telegram.sh --cambiar-chat   # cambiar de destino
+```
+
+Pide el token por entrada oculta (no queda en el historial), lo valida contra
+`getMe`, deja **elegir** la conversación, envía un mensaje de prueba y solo
+entonces configura Kuma y Beszel. Si la prueba falla, se detiene ahí en vez de
+dejar creer que quedó configurado.
+
+### Grupo en vez de conversación privada
+
+Preferible para un equipo: los avisos no dependen de que una sola persona los
+vea. Basta con **agregar el bot al grupo**; el script lo detecta por el evento
+`my_chat_member`, que llega aunque el bot tenga la privacidad activada.
+
+Tres cosas que cambian respecto a una conversación privada:
+
+- **El identificador de un grupo es negativo** (`-100…`). Por eso el script no
+  toma "la última conversación": elegir mal manda los avisos al lugar
+  equivocado **sin dar ningún error**.
+- **Un bot en un grupo no ve los mensajes normales** por omisión, solo los que
+  empiezan con `/` o lo mencionan. Para enviar da igual; importa solo para
+  descubrirlo. Si no aparece, escribe `/start@<usuario_del_bot>` en el grupo.
+- **Si el grupo pasa a supergrupo, su identificador cambia** y los avisos dejan
+  de llegar en silencio. Ocurre al hacerlo público, agregar historial o superar
+  los 200 miembros. Solución: `--cambiar-chat`.
+
+### Lo que ve quien esté en el grupo
+
+Nombre del servicio y su estado (`ERP produccion — caído`), más las métricas de
+saturación. Sin credenciales ni datos de negocio. Aun así, quien esté en el
+grupo sabe cuándo la infraestructura está débil: conviene que sea un grupo
+cerrado.
+
+---
+
 ## Lo que este monitoreo NO cubre
 
 **Si el servidor entero se cae, el monitoreo se cae con él y nadie avisa.**
