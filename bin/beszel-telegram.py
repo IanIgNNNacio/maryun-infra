@@ -7,6 +7,11 @@ Beszel entrega por shoutrrr; su URL de Telegram es
 
 Se guarda tambien el correo, que empezara a funcionar solo en cuanto el
 dominio maryun.cl este verificado en Resend.
+
+OJO con una trampa de Beszel: al CREAR el registro de user_settings sobrescribe
+lo enviado con sus valores por omision, y los webhooks se pierden. Al
+ACTUALIZARLO los respeta. Por eso, cuando no existe, se crea primero y se
+actualiza despues en dos pasos.
 """
 import json
 import urllib.error
@@ -59,27 +64,42 @@ webhook = "telegram://{}@telegram?chats={}".format(
 )
 ajustes = {"webhooks": [webhook], "emails": [correo], "chartTime": "1h"}
 
-filtro = "/api/collections/user_settings/records?perPage=1&filter=" + \
-         urllib.parse.quote("user='{}'".format(uid))
+filtro = ("/api/collections/user_settings/records?perPage=1&filter="
+          + urllib.parse.quote("user='{}'".format(uid)))
 _, existentes = pedir(filtro, token=tok)
 items = existentes.get("items", []) if isinstance(existentes, dict) else []
 
-if items:
-    codigo, resp = pedir(
-        "/api/collections/user_settings/records/" + items[0]["id"],
-        {"settings": ajustes}, metodo="PATCH", token=tok,
-    )
+if not items:
+    codigo, resp = pedir("/api/collections/user_settings/records",
+                         {"user": uid, "settings": ajustes}, token=tok)
+    if codigo not in (200, 201):
+        print("  fallo al crear: HTTP {} {}".format(codigo, resp))
+        raise SystemExit(1)
+    rid = resp["id"]
 else:
-    codigo, resp = pedir(
-        "/api/collections/user_settings/records",
-        {"user": uid, "settings": ajustes}, token=tok,
-    )
+    rid = items[0]["id"]
 
-if codigo not in (200, 201):
-    print("  fallo HTTP {}: {}".format(codigo, resp))
+# Segundo paso siempre: es el unico que Beszel respeta.
+codigo, resp = pedir("/api/collections/user_settings/records/" + rid,
+                     {"settings": ajustes}, metodo="PATCH", token=tok)
+if codigo != 200:
+    print("  fallo al actualizar: HTTP {} {}".format(codigo, resp))
     raise SystemExit(1)
 
 s = resp.get("settings", {})
-print("  destinos por webhook: {} (Telegram)".format(len(s.get("webhooks", []))))
-print("  destinos por correo:  {}".format(", ".join(s.get("emails", [])) or "ninguno"))
+n_webhooks = len(s.get("webhooks", []) or [])
+correos = s.get("emails", []) or []
+
+print("  destinos por webhook: {}".format(n_webhooks))
+print("  destinos por correo:  {}".format(", ".join(correos) or "ninguno"))
+
+# Se comprueba de verdad en vez de anunciar exito: un canal que no quedo
+# guardado deja el monitoreo mudo justo cuando hace falta.
+if n_webhooks == 0:
+    print()
+    print("  ERROR: el webhook de Telegram NO quedo guardado.")
+    print("  Beszel no avisara por Telegram. Revisar antes de dar esto por hecho.")
+    raise SystemExit(1)
+
+print("  Telegram guardado correctamente")
 print("  (el correo empezara a funcionar al verificar el dominio en Resend)")

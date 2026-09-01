@@ -140,6 +140,24 @@ Tres cosas que cambian respecto a una conversación privada:
   de llegar en silencio. Ocurre al hacerlo público, agregar historial o superar
   los 200 miembros. Solución: `--cambiar-chat`.
 
+### Trampa al configurar los destinos de Beszel
+
+Al **crear** el registro de `user_settings` (POST), Beszel sobrescribe lo
+enviado con sus valores por omisión y **pierde los `webhooks`**. Al
+**actualizarlo** (PATCH) sí los respeta. Con el mismo cuerpo exacto:
+
+```
+POST  → {"chartTime":"1h","emails":[...]}                 ← sin webhooks
+PATCH → {"chartTime":"1h","emails":[...],"webhooks":[1]}   ← correcto
+```
+
+Por eso `beszel-telegram.py` crea y **después** actualiza, siempre en dos
+pasos, y **falla ruidosamente si al final quedan cero**. Anunciar éxito sin
+comprobarlo deja el monitoreo mudo justo cuando hace falta.
+
+URL de shoutrrr para Telegram: `telegram://<token>@telegram?chats=<chat_id>`
+— el `chat_id` de un grupo es **negativo**.
+
 ### Lo que ve quien esté en el grupo
 
 Nombre del servicio y su estado (`ERP produccion — caído`), más las métricas de
