@@ -25,18 +25,56 @@ respaldados).
 | PostgreSQL ERP / Mage, Túnel MySis, ClickHouse nativo | puerto TCP |
 | Respaldo diario | *push*: el respaldo avisa; si calla 26 h, salta |
 
-### Por qué el ERP no se vigila por su dominio
+### Por qué el ERP se vigila en `/acceso` y sin seguir redirecciones
 
 `erp.maryun.cl` todavía resuelve a **Vercel** y `preview.maryun.cl` al **VPS
 viejo**. Un monitor contra esas URLs vigilaría los servidores antiguos y no
 avisaría de una caída de maryun01.
 
-Van contra el proxy de este servidor con la cabecera `Host`, que recorre la
-misma ruta real (proxy → aplicación) sin depender del DNS.
+Por eso los monitores van contra el proxy de este servidor con la cabecera
+`Host`. **Pero eso solo no basta, y costó descubrirlo:**
 
-> **Al trasladar los dominios: cambiar ambos monitores a la URL pública.**
-> Además de comprobar la cadena completa (DNS, Cloudflare, proxy, aplicación),
-> Uptime Kuma empieza a avisar del vencimiento del certificado.
+> El ERP responde **307 hacia `/acceso`**, una ruta relativa. Al seguirla, el
+> cliente HTTP de Uptime Kuma reconstruye la URL usando la **cabecera `Host`**
+> en vez del destino de la conexión — y ese segundo salto **sale a internet**.
+>
+> Resultado: durante las primeras horas, el monitor de producción estuvo
+> midiendo **Vercel**, y el de preview el **VPS viejo**. Exactamente lo que la
+> cabecera `Host` pretendía evitar.
+
+Cómo se comprobó, espiando el espacio de red del contenedor:
+
+```bash
+nsenter -t $(docker inspect -f '{{.State.Pid}}' uptime-kuma) -n \
+        ss -tn state established
+```
+
+En 75 segundos aparecieron `216.150.1.65` (Vercel) y `51.222.28.249` (VPS
+viejo). Los tiempos cuadraban: Kuma reportaba 197-217 ms para producción, y un
+`curl` a `erp.maryun.cl/acceso` desde el servidor daba 200 ms.
+
+> Con `ss ... state established`, `ss` **omite la columna de estado**: las
+> direcciones quedan en `$3` y `$4`, no en `$4` y `$5`.
+
+**La configuración correcta**, que nunca sale del servidor:
+
+| | |
+|---|---|
+| URL | `https://coolify-proxy/acceso` |
+| Cabecera | `Host: erp.maryun.cl` / `preview.maryun.cl` |
+| `maxredirects` | **0** |
+| Códigos aceptados | **200-299** solamente |
+
+Se pide la página de login completa a propósito, no un endpoint trivial: si el
+ERP fallara al renderizarla, un chequeo superficial no lo vería.
+
+**Lección general: poner la cabecera `Host` no basta si la respuesta redirige.**
+Hay que quitar la redirección del chequeo, no solo el DNS de la primera
+petición.
+
+> **Al trasladar los dominios:** cambiar ambos monitores a la URL pública. Ahí
+> sí conviene seguir redirecciones —se quiere comprobar la cadena completa— y
+> además Uptime Kuma empieza a avisar del vencimiento del certificado.
 
 ### Por qué no se vigila por nombre de contenedor
 
