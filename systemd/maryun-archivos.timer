@@ -1,0 +1,11 @@
+[Unit]
+Description=Dispara la copia de adjuntos cada 6 horas
+
+[Timer]
+# En el minuto 20 para no coincidir con el respaldo de las bases, que va a las 03:15.
+OnCalendar=*-*-* 00,06,12,18:20:00
+RandomizedDelaySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

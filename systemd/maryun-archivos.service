@@ -1,0 +1,11 @@
+[Unit]
+Description=Copia de los adjuntos del ERP al bucket de respaldo en R2
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/archivos.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h
