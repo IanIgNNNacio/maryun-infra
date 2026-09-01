@@ -1,19 +1,25 @@
 # Nombres de dominio que funcionan SOLO dentro de la VPN.
 #
-# Idea: los registros DNS de estos nombres apuntan a 10.8.0.1 (la IP del
-# servidor dentro de WireGuard). Quien no este conectado a la VPN resuelve una
-# direccion privada y no llega a ninguna parte; quien si lo este entra por
-# nombre y no tiene que acordarse de puertos.
+# Los registros DNS de estos nombres apuntan a 10.8.0.1, la direccion del
+# servidor dentro de WireGuard. Quien no este conectado resuelve una direccion
+# privada y no llega a ninguna parte; quien si lo este entra por nombre y no
+# tiene que acordarse de puertos.
+#
+# TLS: los certificados se emiten por validacion DNS-01 contra Cloudflare
+# (emisor 'cfdns', definido en el compose del proxy). Hace falta porque
+# Let's Encrypt no puede alcanzar una IP privada para validar por HTTP, y
+# porque maryun.cl tiene HSTS grabado en los navegadores: no basta servir
+# esto por HTTP plano, el navegador fuerza HTTPS y no deja aceptar un
+# certificado no confiable.
 #
 # Doble cierre de seguridad:
 #  1. El DNS apunta a una IP privada, asi que desde internet no hay ruta.
 #  2. Ademas se exige que la peticion venga de 10.8.0.0/24, por si algun dia
 #     alguien apunta uno de estos nombres a la IP publica por error.
 #
-# Los servicios se referencian por 10.8.0.1:<puerto> en vez de por nombre de
-# contenedor porque coolify-proxy vive en la red 'coolify' y estos servicios en
-# la red 'data': no se alcanzan por nombre. Usar la IP de la VPN evita tener
-# que unir las dos redes solo para esto.
+# Los servicios se referencian por 10.8.0.1:<puerto> salvo los que comparten la
+# red 'coolify' con el proxy: a esos hay que llegarles por nombre de contenedor,
+# porque el rodeo host -> contenedor no completa la vuelta y la peticion se cuelga.
 
 http:
   middlewares:
@@ -21,43 +27,79 @@ http:
       ipAllowList:
         sourceRange:
           - 10.8.0.0/24
+    a-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
 
   routers:
+    # ── HTTP: solo redirige a HTTPS ──────────────────────────────────────────
+    vpn-http:
+      rule: >-
+        Host(`metabase.maryun.cl`) || Host(`reportes.maryun.cl`) ||
+        Host(`superset.maryun.cl`) || Host(`mage.maryun.cl`) ||
+        Host(`coolify.maryun.cl`) || Host(`monitoreo.maryun.cl`) ||
+        Host(`metricas.maryun.cl`)
+      entryPoints: [http]
+      middlewares: [solo-vpn, a-https]
+      service: metabase-vpn        # irrelevante: siempre redirige
+
+    # ── HTTPS: lo real ───────────────────────────────────────────────────────
     metabase-vpn:
       rule: "Host(`metabase.maryun.cl`) || Host(`reportes.maryun.cl`)"
-      entryPoints: [http]
+      entryPoints: [https]
       middlewares: [solo-vpn]
       service: metabase-vpn
+      tls:
+        certResolver: cfdns
+        domains:
+          - main: metabase.maryun.cl
+          - main: reportes.maryun.cl
 
     superset-vpn:
       rule: "Host(`superset.maryun.cl`)"
-      entryPoints: [http]
+      entryPoints: [https]
       middlewares: [solo-vpn]
       service: superset-vpn
+      tls:
+        certResolver: cfdns
+        domains: [{ main: superset.maryun.cl }]
 
     mage-vpn:
       rule: "Host(`mage.maryun.cl`)"
-      entryPoints: [http]
+      entryPoints: [https]
       middlewares: [solo-vpn]
       service: mage-vpn
+      tls:
+        certResolver: cfdns
+        domains: [{ main: mage.maryun.cl }]
 
     coolify-vpn:
       rule: "Host(`coolify.maryun.cl`)"
-      entryPoints: [http]
+      entryPoints: [https]
       middlewares: [solo-vpn]
       service: coolify-vpn
+      tls:
+        certResolver: cfdns
+        domains: [{ main: coolify.maryun.cl }]
 
     monitoreo-vpn:
       rule: "Host(`monitoreo.maryun.cl`)"
-      entryPoints: [http]
+      entryPoints: [https]
       middlewares: [solo-vpn]
       service: kuma-vpn
+      tls:
+        certResolver: cfdns
+        domains: [{ main: monitoreo.maryun.cl }]
 
     metricas-vpn:
       rule: "Host(`metricas.maryun.cl`)"
-      entryPoints: [http]
+      entryPoints: [https]
       middlewares: [solo-vpn]
       service: beszel-vpn
+      tls:
+        certResolver: cfdns
+        domains: [{ main: metricas.maryun.cl }]
 
   services:
     metabase-vpn:
@@ -69,13 +111,12 @@ http:
     mage-vpn:
       loadBalancer:
         servers: [{ url: "http://10.8.0.1:6789" }]
+    # Coolify y Uptime Kuma comparten la red 'coolify' con el proxy: por la IP
+    # de la VPN se colgaban, porque el trafico salia del contenedor hacia el
+    # host y esa vuelta no se completa. Se los alcanza por nombre de contenedor.
     coolify-vpn:
       loadBalancer:
         servers: [{ url: "http://coolify:8080" }]
-    # Uptime Kuma y Coolify comparten la red 'coolify' con el proxy, asi que se
-    # alcanzan por nombre de contenedor. Por la IP de la VPN se colgaban: el
-    # trafico salia del contenedor hacia el host y volvia a entrar, y esa vuelta
-    # no se completa para los servicios que ya estan en la misma red.
     kuma-vpn:
       loadBalancer:
         servers: [{ url: "http://uptime-kuma:3001" }]
