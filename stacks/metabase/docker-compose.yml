@@ -34,7 +34,7 @@ services:
     networks: [data]
 
   metabase:
-    image: metabase/metabase:v0.60.26
+    image: metabase/metabase:v0.63.16
     container_name: metabase
     restart: unless-stopped
 
