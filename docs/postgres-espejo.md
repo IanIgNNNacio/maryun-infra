@@ -225,3 +225,37 @@ sudo /srv/bin/mb-comparar.py                       # contrastar por API
 
 Las tres últimas leen la clave de API de Metabase por la entrada estándar, no
 por argumento, para que no aparezca en `ps` ni en el historial.
+
+---
+
+## Apéndice · filtros del tablero 24 (Facturas RCV)
+
+Se añadieron dos filtros —**Periodo** y **Proveedor (RUT)**— al tablero de
+Facturas RCV, que no tenía ninguno. Las 16 tarjetas son SQL nativo, así que un
+filtro de tablero no se conecta solo: hay que meter una cláusula opcional
+`[[AND …]]` en cada consulta, y esas cláusulas desaparecen cuando el filtro está
+vacío.
+
+**Resultado:** 14 tarjetas con filtro, **0 rotas**, 11 cambian su resultado al
+filtrar. Las tres que no cambian el número de filas lo hacen por motivos
+legítimos: una tiene dos estados fijos, otra es un top 20 y la tercera topa en
+`LIMIT 500` con y sin filtro.
+
+**Dos quedaron fuera a propósito**, y siguen funcionando sin filtro:
+
+- **363, «Cobertura de clasificación por dimensión»** — al insertar la cláusula
+  responde `syntax error at or near "AND"`. Su consulta exterior no tiene un
+  único punto donde colgarla.
+- **361, «Pivot cuenta contable × mes»** — es tabla dinámica: Metabase envuelve
+  el SQL para pivotar y la cláusula rompe ese envoltorio.
+
+Para que las acepten hay que editarlas a mano mirando su SQL entero. Están en la
+lista `NO_TOCAR` de `bin/mb-filtros-rcv.py` para que nadie lo reintente a ciegas.
+
+**El original de las 16 está guardado** en `/srv/secrets/tablero24-originales.json`,
+y `bin/probar-filtros-rcv.py` comprueba que ninguna quedó rota y cuáles filtran
+de verdad.
+
+Una lección de esto: la primera comprobación solo probó las tarjetas **sin**
+filtro puesto, y las dos que fallaban pasaron. Un filtro hay que probarlo
+aplicado.
