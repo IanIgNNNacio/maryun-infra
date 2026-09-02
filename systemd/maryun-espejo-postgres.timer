@@ -1,0 +1,14 @@
+[Unit]
+Description=Dispara el refresco del Postgres espejo
+
+[Timer]
+# A las 07:30 UTC, hora y media despues del pipeline de Mage que carga el DWH
+# (0 6 * * * UTC). Antes seria copiar datos a medio cargar.
+OnCalendar=*-*-* 07:30:00
+RandomizedDelaySec=5m
+# Si el servidor estuvo apagado a esa hora, corre al encender: un espejo viejo
+# que nadie refresca es peor que no tenerlo, porque nadie sabe de cuando es.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

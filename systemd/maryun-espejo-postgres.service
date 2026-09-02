@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresca el Postgres espejo con las tablas de MySis desde ClickHouse
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/espejo-mysis-a-postgres.py --hazlo
+# El espejo no debe competir con el ERP ni con los tableros por CPU ni disco.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+# La copia completa tarda unos 40 segundos, pero si ClickHouse esta ocupado
+# puede alargarse. Media hora es holgado sin quedarse colgado para siempre.
+TimeoutStartSec=30min
+StandardOutput=append:/var/log/maryun-espejo.log
+StandardError=append:/var/log/maryun-espejo.log

@@ -1,7 +1,9 @@
 name: metabase
 
-# Metabase fijado en v0.60.26: mismo major que el VPS viejo (esquema v60), asi la
-# migracion no toca la base de la aplicacion. OJO: el major 60 llega a fin de vida
+# Metabase en v0.63.16. Se subio desde la v0.60.26 -el major del VPS viejo- porque
+# el 60 llegaba a fin de vida el 2026-09-01. La edicion es la abierta: la imagen es
+# metabase/metabase y no metabase-enterprise, asi que SAML, JWT y el sandbox por
+# filas no estan disponibles. Para SSO de Microsoft hace falta una puerta delante.
 # el 2026-09-01 — actualizar a la 63 en cuanto se verifique que todo funciona.
 #
 # Sin credenciales en este archivo: todas viven en /srv/secrets/metabase.env.
@@ -52,6 +54,15 @@ services:
       TZ: ${TZ}
       # En el VPS viejo la JVM tomaba 11.5 GB porque no habia techo.
       JAVA_OPTS: "-Xmx4g"
+      # Minimo de contrasena. Por defecto son 6 caracteres y un digito, que era
+      # aceptable mientras esto solo se alcanzaba por la VPN; desde que
+      # metabase.maryun.cl resuelve a la IP publica, no. No se puede cambiar por
+      # la API -el PUT da 500 sin tocar la base- porque solo se lee de aqui.
+      #
+      # OJO: no invalida las contrasenas que ya existen. Solo se aplica a las
+      # nuevas y a los cambios, asi que hay que pedir el cambio a quien tenga una
+      # debil.
+      MB_PASSWORD_COMPLEXITY: strong
 
     depends_on:
       metabase-db:

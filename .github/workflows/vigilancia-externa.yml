@@ -1,0 +1,130 @@
+name: Vigilancia externa
+
+# Comprueba desde FUERA que el servidor responde.
+#
+# Por qué hace falta: los tres monitores que hay -Uptime Kuma, Beszel y el
+# agente de Coolify- corren dentro de maryun01. Vigilan servicios, no la
+# máquina: si se cae el servidor o su red, no avisa nadie, porque el que tenía
+# que avisar se cayó con él. Ya pasó dos veces, el 1 y el 2 de septiembre de
+# 2026, con reinicios en frío de unos dos minutos que nadie notificó.
+#
+# Esto corre en la infraestructura de GitHub, así que es independiente del
+# servidor por construcción.
+#
+# Cómo avisa: si algo falla, el trabajo termina en error y GitHub manda el
+# correo de «workflow run failed» a quien tenga el repositorio en seguimiento.
+# No hace falta ninguna cuenta ni servicio nuevo.
+
+on:
+  schedule:
+    # Cada 30 minutos. El intervalo está elegido por coste, no por gusto:
+    # GitHub cobra un mínimo de 1 minuto por ejecución, así que */30 son unas
+    # 1.440 ejecuciones y ~1.440 minutos al mes, dentro de los 2.000 del plan
+    # gratuito para repositorios privados. Cada 15 minutos se saldría del plan.
+    #
+    # Si hace falta granularidad de un minuto, la vía es un Cron Trigger de
+    # Cloudflare Workers: es gratis y no consume esto. Está anotado en
+    # docs/monitoreo-externo.md.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# Permisos mínimos: esto sólo lee y hace peticiones salientes.
+permissions:
+  contents: read
+
+jobs:
+  comprobar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Responden los nombres públicos
+        run: |
+          set -uo pipefail
+
+          # nombre|url|códigos aceptables separados por coma
+          #
+          # Se aceptan varios códigos a propósito: el ERP contesta 307 porque
+          # redirige a la pantalla de acceso, y eso ES una respuesta sana. Pedir
+          # 200 daría una falsa alarma permanente.
+          COMPROBACIONES="
+          ERP producción|https://erp.maryun.cl/|200,307,308
+          ERP preview|https://preview.maryun.cl/|200,307,308
+          Metabase|https://metabase.maryun.cl/api/health|200
+          Superset|https://superset.maryun.cl/health|200
+          "
+
+          fallos=0
+          echo "### Vigilancia externa" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Servicio | Código | Latencia | Estado |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS='|' read -r nombre url esperados; do
+            [ -z "${nombre:-}" ] && continue
+
+            # Dos intentos antes de dar por caído: un fallo aislado de red
+            # entre GitHub y Cloudflare no es una caída del servidor, y una
+            # alarma falsa a las tres de la mañana enseña a ignorar las alarmas.
+            for intento in 1 2; do
+              respuesta=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" \
+                            --max-time 25 --retry 0 "$url" 2>/dev/null || echo "000 0")
+              codigo=${respuesta%% *}
+              tiempo=${respuesta##* }
+              case ",$esperados," in
+                *",$codigo,"*) break ;;
+              esac
+              [ "$intento" = 1 ] && sleep 10
+            done
+
+            case ",$esperados," in
+              *",$codigo,"*)
+                echo "| $nombre | $codigo | ${tiempo}s | ok |" >> "$GITHUB_STEP_SUMMARY"
+                echo "ok      $nombre -> $codigo en ${tiempo}s"
+                ;;
+              *)
+                echo "| $nombre | $codigo | ${tiempo}s | **FALLA** (esperaba $esperados) |" >> "$GITHUB_STEP_SUMMARY"
+                echo "FALLA   $nombre -> $codigo, esperaba uno de $esperados"
+                fallos=$((fallos + 1))
+                ;;
+            esac
+          done <<< "$COMPROBACIONES"
+
+          echo ""
+          if [ "$fallos" -gt 0 ]; then
+            echo "$fallos comprobación(es) fallaron."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**$fallos fallo(s).** Si todas fallan a la vez, sospechar de la" >> "$GITHUB_STEP_SUMMARY"
+            echo "máquina o de su red antes que de cada servicio." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Todo responde."
+
+      - name: Al certificado le queda margen
+        # Los certificados los renueva Traefik por DNS-01 contra Cloudflare. Si
+        # esa renovación se rompe, no se nota hasta que caducan y entonces cae
+        # todo de golpe. Catorce días de margen dan tiempo de sobra a
+        # enterarse.
+        run: |
+          set -uo pipefail
+          fallos=0
+          for host in erp.maryun.cl preview.maryun.cl metabase.maryun.cl superset.maryun.cl; do
+            fin=$(echo | openssl s_client -servername "$host" -connect "$host":443 2>/dev/null \
+                  | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+            if [ -z "$fin" ]; then
+              echo "FALLA   $host: no pude leer el certificado"
+              fallos=$((fallos + 1))
+              continue
+            fi
+            dias=$(( ( $(date -d "$fin" +%s) - $(date +%s) ) / 86400 ))
+            if [ "$dias" -lt 14 ]; then
+              echo "FALLA   $host: caduca en $dias días ($fin)"
+              fallos=$((fallos + 1))
+            else
+              echo "ok      $host: caduca en $dias días"
+            fi
+            echo "| Certificado $host | | | caduca en $dias días |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          [ "$fallos" -gt 0 ] && exit 1
+          exit 0

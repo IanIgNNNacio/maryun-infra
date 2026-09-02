@@ -1,0 +1,114 @@
+name: dwh-postgres
+
+# Postgres espejo para tableros. Creado el 2 de septiembre de 2026.
+#
+# Por qué existe, en una línea: hay funciones de Metabase y Superset que sólo
+# andan sobre Postgres, y los datos viven en ClickHouse.
+#
+# Concretamente, verificado contra la documentación de Metabase OSS v0.63 y
+# Superset 6.1.0:
+#
+#   - Subir CSV/Excel desde la interfaz. Metabase lo soporta en Postgres pero en
+#     ClickHouse **sólo en ClickHouse Cloud**; en el autoalojado la función no
+#     aparece. Superset directamente declara supports_file_upload = False para
+#     ClickHouse y lanza DatabaseUploadNotSupported aunque un administrador
+#     fuerce allow_file_upload por API.
+#   - Actions de Metabase, o sea escribir desde un tablero. El driver de
+#     ClickHouse declara :actions false. No es cosa de licencia, es del motor.
+#   - El botón «Stop» de Superset. En Postgres ejecuta pg_terminate_backend();
+#     en ClickHouse no hay cancel_query, así que la consulta se marca detenida en
+#     la interfaz y **sigue consumiendo el servidor**.
+#   - Validación de SQL en vivo y estimación de costo en SQL Lab: sólo existen
+#     para Presto y Postgres.
+#
+# Lo que NO es: el motor de los tableros. Ésos siguen en ClickHouse, que es donde
+# rinde la lectura analítica. Esto es un espejo de las tablas de MySis.
+#
+# Es un contenedor aparte y no un esquema dentro del Postgres del ERP a
+# propósito: ese otro atiende producción, y 14 millones de filas de espejo no
+# tienen por qué compartir memoria ni respaldos con él.
+
+services:
+  dwh-postgres:
+    image: postgres:16
+    container_name: dwh-postgres
+    restart: unless-stopped
+
+    # Sólo por la VPN, igual que el resto. 5432 y 5433 ya están tomados dentro
+    # de la red `data`; aquí se publica en 5434 para poder conectar un cliente
+    # de escritorio por el túnel sin exponer nada a internet.
+    ports:
+      - "10.8.0.1:5434:5432"
+
+    environment:
+      POSTGRES_DB: ${PG_DWH_DB}
+      POSTGRES_USER: ${PG_DWH_USER}
+      POSTGRES_PASSWORD: ${PG_DWH_PASS}
+      TZ: ${TZ}
+      # Sin esto, initdb usa la codificación del sistema y los acentos de los
+      # nombres de cliente llegan mal.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+
+    # Ajustes para consultas analíticas, no para transacciones cortas. La
+    # máquina tiene 62 GB y este contenedor tiene techo de 8, así que
+    # shared_buffers se queda en 2 GB -la cuarta parte del techo, que es la
+    # regla habitual- y effective_cache_size describe lo que el sistema puede
+    # llegar a cachear.
+    command:
+      - postgres
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "effective_cache_size=6GB"
+      # work_mem es POR operación de orden o hash, no por consulta: una consulta
+      # con varios joins puede multiplicarlo. 64 MB con pocas sesiones
+      # simultáneas es holgado sin ser temerario.
+      - "-c"
+      - "work_mem=64MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      # La copia inicial crea 35 tablas y sus índices; sin esto el CREATE INDEX
+      # va de a un núcleo.
+      - "-c"
+      - "max_parallel_workers=8"
+      - "-c"
+      - "max_parallel_workers_per_gather=4"
+      - "-c"
+      - "max_parallel_maintenance_workers=4"
+      # Disco NVMe: el coste de una lectura aleatoria no es cuatro veces el de
+      # una secuencial, y con el valor por defecto el planificador evita índices
+      # que sí conviene usar.
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "jit=off"
+      # Para poder ver después qué consultas de los tableros son lentas.
+      - "-c"
+      - "log_min_duration_statement=3000"
+      - "-c"
+      - "track_io_timing=on"
+
+    volumes:
+      - /srv/stacks/dwh-postgres/db:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_DWH_USER} -d ${PG_DWH_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+    networks: [data]
+
+networks:
+  data:
+    name: data
+    external: true
