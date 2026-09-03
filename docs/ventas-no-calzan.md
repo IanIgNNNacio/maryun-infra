@@ -375,3 +375,66 @@ ORDER BY (origen, pid, sku)
 donde `origen` es `VENTA`, `NOTA_CREDITO` o `ANEXO`, escrito en cada rama del
 `UNION` del cargador. Sin esa columna no hay clave que sirva: hoy dos registros
 distintos comparten identidad, y uno de los dos se pierde.
+
+---
+
+## 8. Recarga completa de las filas afectadas (2 de septiembre de 2026, tarde)
+
+Se volvieron a borrar y traer desde MySis **las 319 filas recientes** que habían
+quedado de los pares duplicados —251 del 31 de agosto y 68 del 31 de
+diciembre—, en vez de conservar la copia que la limpieza había elegido.
+
+| | |
+|---|---|
+| duración de la recarga | 185 s |
+| filas insertadas | 319, exactamente las borradas |
+| pares duplicados en toda la tabla | **0** |
+
+**El mes en curso, que era donde el jefe veía el problema:**
+
+| | |
+|---|---|
+| venta según MySis (26-08 al 02-09) | $326.913.169 |
+| venta en el DWH | $326.913.167 |
+| diferencia | **−$2** |
+
+Antes de la corrección sobraban **$19,86 millones** en ese período.
+
+### Lo que quedó sin recargar, y por qué
+
+**339 filas de 2018 a 2021**, que suman **−$455.040**. Son notas de crédito, y
+se comprobó que las 339 existen en `mysis_mstr_nc_aux`.
+
+No se recargaron porque el cargador filtra por «días hacia atrás desde hoy» y
+alcanzarlas exigiría una ventana de unos 3.000 días: ocho años de pedidos por la
+consulta con subconsultas correlacionadas, contra la base de producción del ERP.
+El coste no guarda relación con el beneficio.
+
+Se verificaron contra los espejos completos que el refresco nocturno reconstruye
+cada noche, que cubren desde 2018-05-16:
+
+- **337 de 339 coinciden exactamente** con el origen.
+- **2 no**: `pid` 11850 y 11838, ambas de diciembre de 2020, que se quedaron
+  cortas en **$62.920** entre las dos. Se dejan anotadas; se corrigen solas
+  cuando `ventas_mysis` entre al refresco nocturno.
+
+### Una comprobación que evitó un error
+
+Antes de dar por buena la limpieza de duplicados se verificó algo que no era
+obvio: como `pid` colisiona entre `mstr_pedidos` y `mstr_nc`, un par
+`(pid, sku)` repetido **podría haber sido una venta y su nota de crédito**, no
+un duplicado. Borrar una de las dos habría destruido un registro legítimo.
+
+Se midió: de los 658 pares, **ninguno mezclaba signos** y 654 tenían todas sus
+copias idénticas en monto. Eran duplicados de verdad. Los 4 restantes son los
+dos ya citados más dos que sí coinciden con el origen.
+
+### Filas que ya no existen en el origen
+
+Contadas contra los espejos: **31 filas, $919.238**, entre octubre de 2024 y
+julio de 2025.
+
+Ojo con un falso positivo al medir esto: aparecen además unas 545 filas del día
+en curso que «no existen en el espejo». No es que falten — es que el espejo se
+reconstruye de noche y todavía no las vio. Hay que excluir los últimos dos días
+al hacer esta comparación.
