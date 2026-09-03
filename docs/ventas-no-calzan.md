@@ -244,3 +244,134 @@ Las tres se resuelven con el mismo cambio: pasar `dwh.ventas_mysis` a
 de duplicar, el anti-join sobra, y el tablero puede elegir qué sumar.
 
 Es un cambio de tabla con recarga completa, así que no se hizo sin decisión.
+
+---
+
+## 7. De dónde salen realmente esos casos (revisado contra el código de MySis)
+
+Tres preguntas de Ian, contestadas leyendo `maryun-mysis/mryn` y consultando
+MySis **en solo lectura**.
+
+### 7.1 ¿Por qué había filas con `facturado` desactualizado, si el ETL no se equivoca?
+
+No se equivoca. **`dt_out` cambia en MySis después de que el ETL ya pasó.**
+
+En `API/creafactura.php` conviven las dos ramas:
+
+```php
+// 272 — al emitir la GUIA
+update mstr_pedidos set guia='$elfolio', ..., dt_out=now() where pid in ($pid)
+// 274 — despues, al emitir la FACTURA del mismo pedido
+update mstr_pedidos set factura='$elfolio', ..., dt_out=now() where pid in ($pid)
+```
+
+Un pedido despachado con guía en mayo y facturado en julio tiene `dt_out` de
+mayo primero y de julio después. El mismo patrón está en `fuerza.php`,
+`creand.php` (notas de débito), `creafacturadeguia.php`, `creaRefactura.php` y
+los `DTE*` de OpenFactura. Y `DTEfactura_manual_no_sii.php:370` va más lejos:
+fija `dt_out='$fecha_emite'`, una fecha que teclea una persona.
+
+El ETL mira los últimos **5 días** y **nunca vuelve a mirar** una fila que ya
+insertó. Si el segundo `dt_out=now()` ocurre pasada esa ventana, el DWH se queda
+con el primero para siempre. No es un error de lógica del ETL: es que su diseño
+supone que los datos no cambian, y sí cambian.
+
+### 7.2 ¿Cuándo se borra un pedido?
+
+Hay dos caminos, los dos con guardas:
+
+- `pages/pedidos/cancelacotizacion.php` — cancelar una cotización. Sólo borra si
+  **no tiene factura** y **no tiene picking**.
+- `pages/almacenaje/deltraspaso.php` — borrar un traspaso interno. Sólo si
+  `picking == 0`.
+
+**MySis archiva antes de borrar**, y eso está bien hecho:
+
+```php
+INSERT INTO mstr_pedidos_borrados     SELECT * FROM mstr_pedidos     WHERE pid=$gid;
+INSERT INTO mstr_pedidos_aux_borrados SELECT * FROM mstr_pedidos_aux WHERE pid=$gid;
+```
+
+Hay **33.171 pedidos archivados**, ninguno con factura, coherente con la guarda.
+
+Aparte, las **líneas** se borran y se reinsertan como rutina cada vez que se
+edita un pedido: `grabar_pedido.php:169` borra las líneas sin picking antes de
+regrabar, y `abreguia.php`, `grabar_guia.php` y `cancelanv.php` borran todas las
+líneas del pedido. Por eso una línea puede desaparecer sin que desaparezca el
+pedido.
+
+**El caso concreto: pedido 1122070.**
+
+| | en el DWH | en `mstr_pedidos_borrados` |
+|---|---|---|
+| cliente | DISTRIBUIDORA OSCAR JOSE FICA DELGADO EIRL | mismo |
+| sucursal | CONCEPCION | 3 |
+| creado | | 2026-02-04 08:39:48 |
+| cerrado | | 2026-02-04 08:41:30 |
+| **factura** | **988659** | **NULL** |
+| **facturado** | **2026-02-19** | **NULL** |
+| neto | | 77.700 |
+
+Tres líneas de BOTIN NG 572 AC, $25.900 cada una.
+
+La secuencia se lee sola: se creó y cerró el 4 de febrero, se facturó (988659,
+`dt_out` 2026-02-19), **el ETL lo capturó así**, después **se le quitó la
+factura** —volvió a NULL— y recién entonces se pudo cancelar y archivar. El DWH
+se quedó con la foto de cuando tenía factura, y siguió contando esa venta.
+
+### 7.3 ¿No son normales las líneas con saldo negativo?
+
+**En MySis no existen.** De 327.764 líneas de venta del último año: **cero** con
+precio unitario negativo y **cero** con cantidad negativa.
+
+Las negativas del DWH son notas de crédito, que el cargador multiplica por −1.
+Pero al rastrear una apareció algo peor.
+
+**`pid` no es único entre tablas.**
+
+La fila del DWH decía: pid 43156, factura 64992, facturado 2026-05-26, HOSPITAL
+DE ACHAO. En MySis, `mstr_pedidos.pid = 43156` es **otro pedido**: factura
+268431, `dt_out` **2018-10-19**, otros SKU.
+
+Medido:
+
+| | |
+|---|---|
+| pids distintos en `mstr_pedidos` | 1.170.232 |
+| pids distintos en `mstr_nc` | 44.815 |
+| **pids que existen en las dos** | **44.815 — el 100 %** |
+| pares `(pid, sku)` que chocan | **215** |
+
+Y el DWH usa **`(pid, sku)` como clave natural** en el anti-join del exportador.
+
+**De los 215 pares que chocan, 212 tienen una sola fila en el DWH donde debería
+haber dos.** O sea: **212 registros perdidos en silencio** —una venta o su nota
+de crédito— porque cuando llegó el segundo, la clave ya estaba ocupada y el
+anti-join lo dio por insertado.
+
+Eso no lo arregla ninguna recarga: mientras la clave sea `(pid, sku)`, el
+segundo registro nunca va a entrar.
+
+### 7.4 Corrección de algo que se dijo antes
+
+En el punto 6 se atribuyó la diferencia de 2026-06 a «una línea de venta
+legítima con monto negativo». **Es falso.** Esas líneas negativas no son ventas:
+son notas de crédito cuyo `pid` choca con el de un pedido, y por eso ningún
+filtro basado en `pid IN mstr_nc` las clasifica bien.
+
+Las 5 filas huérfanas que se borraron sí estaban bien borradas: se comprobó que
+ninguna existe hoy en `mstr_pedidos_aux` **ni** en `mstr_nc_aux`.
+
+### 7.5 Lo que esto cambia en la solución
+
+La clave natural tiene que incluir **de qué tabla viene el registro**. La
+propuesta del punto 6 se corrige así:
+
+```sql
+-- ReplacingMergeTree con version, y la clave completa
+ORDER BY (origen, pid, sku)
+```
+
+donde `origen` es `VENTA`, `NOTA_CREDITO` o `ANEXO`, escrito en cada rama del
+`UNION` del cargador. Sin esa columna no hay clave que sirva: hoy dos registros
+distintos comparten identidad, y uno de los dos se pierde.
