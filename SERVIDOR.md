@@ -648,6 +648,7 @@ sigue siendo el respaldo diario.
 | `maryun-pitr-vigilar` | cada 10 min | vigila el archivado de WAL, `pg_wal` y el espacio |
 | `maryun-pitr-ensayo` | 1.er domingo de mes | **restaura de verdad** y avisa si falla |
 | `maryun-espejo-postgres` | 07:30 UTC | refresca el Postgres espejo |
+| `maryun-preview` | cada hora, min. 40 | copia producción a preview (base y bucket) y reinicia la aplicación. Se salta si existe `/srv/PREVIEW-CONGELADO`. Detalle en [`docs/preview.md`](docs/preview.md) |
 | `maryun-discos` | diario | lee el SMART de los NVMe |
 | `maryun-red` | cada minuto | registra caídas de red con su duración |
 | `maryun-arranque` | al arrancar | anota si la caída fue en seco y cuánto duró |

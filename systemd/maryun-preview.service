@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresca preview del ERP con los datos de produccion
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/refrescar-preview.sh

@@ -113,17 +113,11 @@ protegiendo algo que ya es reproducible.
 ### Preview
 
 `maryun_erp_preview` vive en el mismo cluster que producción, así que el PITR y
-el volcado diario la cubren igual. Lo que **ya no existe** es lo que había en el
-VPS viejo: `scripts/replica/sync.sh` traía producción desde Neon cada hora y de
-paso podía refrescar preview, para que las pruebas se hicieran con datos reales.
-Ese script dependía de Neon y de Vercel, que ya no están, y **no está instalado
-en este servidor** — no hay cron ni temporizador que lo llame. Preview quedó
-congelada en la instantánea con la que se creó (210 MB frente a los 289 MB de
-producción).
+el volcado diario la cubren igual.
 
-Tampoco se respalda su bucket: `maryun-archivos` copia sólo `maryun-erp`, no
-`maryun-erp-preview`. Es defendible —preview es desechable por definición— pero
-conviene que sea una decisión y no un olvido.
+Su bucket `maryun-erp-preview` **no se respalda**, y es correcto: se regenera
+solo en el refresco horario que copia producción a preview. Ese refresco está
+documentado en [`preview.md`](preview.md).
 
 ---
 

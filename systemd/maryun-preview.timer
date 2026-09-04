@@ -1,0 +1,12 @@
+[Unit]
+Description=Temporizador del refresco de preview
+
+[Timer]
+# Cada hora en el minuto 40. Los demas minutos estan ocupados: :00/:15/:30/:45
+# el PITR a R2, :20 los adjuntos, 03:15 el respaldo diario.
+OnCalendar=*-*-* *:40:00
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target
