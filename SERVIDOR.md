@@ -600,6 +600,40 @@ sudo /srv/bin/borrar-respaldo-viejo.sh # se niega si hay menos de 3 generaciones
 **Pendiente:** queda un destino viejo, `ovh:maryun01`, cifrado con claves que se
 filtraron y ya se rotaron. Se borra cuando `maryun01-v2` tenga 3 generaciones.
 
+### PITR: la base del ERP aparte
+
+`maryun_erp` **no** se conforma con el volcado diario. Desde el 4-sep-2026 tiene
+archivado continuo de WAL con pgBackRest, así que se puede volver a **cualquier
+instante**, no sólo al último respaldo.
+
+Por qué sólo esta base: el ERP emite unos 3.100 documentos al SII cada día y un
+DTE aceptado no se puede des-enviar. Restaurar al volcado de ayer deja la base
+sin facturas que el SII sí tiene, con folios quemados que la base cree libres —
+y eso se reconcilia a mano, folio por folio. La ventana de pérdida pasa de
+24 horas a **un minuto**.
+
+```
+  maryun-erp-db ──(archive_command)──► /srv/pitr ──(rclone crypt, 15 min)──► R2
+```
+
+El repositorio local es el único que toca `archive_command`, a propósito: si el
+archivado dependiera de la red, un corte de red haría crecer `pg_wal` hasta
+llenar el disco y **PostgreSQL se detendría**. Es el modo de fallo clásico del
+PITR y aquí no puede ocurrir por un problema de red.
+
+```bash
+sudo /srv/bin/pitr.sh info      # hasta dónde se puede volver
+sudo /srv/bin/pitr.sh check     # ¿el archivado funciona de verdad?
+sudo /srv/bin/pitr.sh ensayo    # restaurar de verdad, sin tocar producción
+```
+
+Ocupa 132 MB tras la primera copia completa, y se estabiliza en el orden de 5 a
+10 GB con la retención puesta (4 completos, 14 diferenciales, 45 días en R2).
+
+**El runbook de recuperación, las trampas y la verificación están en
+[`docs/pitr.md`](docs/pitr.md).** ClickHouse no tiene equivalente: su ventana
+sigue siendo el respaldo diario.
+
 ---
 
 ## 10 · Vigilancia y tareas programadas
@@ -608,6 +642,11 @@ filtraron y ya se rotaron. Se borra cuando `maryun01-v2` tenga 3 generaciones.
 |---|---|---|
 | `maryun-respaldo` | 03:15 UTC | respaldo diario |
 | `maryun-archivos` | cada 6 h | copia los adjuntos del ERP a R2 |
+| `maryun-pitr-full` | domingos 04:00 UTC | copia base completa de `maryun_erp` |
+| `maryun-pitr-diff` | 04:30 UTC | copia base diferencial de `maryun_erp` |
+| `maryun-pitr-externo` | cada 15 min | empuja el repositorio de PITR a R2, cifrado |
+| `maryun-pitr-vigilar` | cada 10 min | vigila el archivado de WAL, `pg_wal` y el espacio |
+| `maryun-pitr-ensayo` | 1.er domingo de mes | **restaura de verdad** y avisa si falla |
 | `maryun-espejo-postgres` | 07:30 UTC | refresca el Postgres espejo |
 | `maryun-discos` | diario | lee el SMART de los NVMe |
 | `maryun-red` | cada minuto | registra caídas de red con su duración |

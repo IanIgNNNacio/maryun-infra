@@ -1,0 +1,10 @@
+[Unit]
+Description=Temporizador del ensayo mensual de restauracion
+
+[Timer]
+OnCalendar=Sun *-*-01..07 05:00:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

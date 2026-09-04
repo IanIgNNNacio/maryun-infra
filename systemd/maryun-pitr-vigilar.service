@@ -1,0 +1,8 @@
+[Unit]
+Description=PITR: comprobar archivado, espacio y respaldos
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/vigilar-pitr.sh

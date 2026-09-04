@@ -1,0 +1,8 @@
+[Unit]
+Description=PITR: copia del repositorio a R2
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/pitr.sh externo

@@ -1,0 +1,9 @@
+[Unit]
+Description=PITR: ensayo mensual de restauracion
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=LIMPIAR=1
+ExecStart=/srv/bin/pitr.sh ensayo

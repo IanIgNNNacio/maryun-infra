@@ -1,0 +1,10 @@
+[Unit]
+Description=Temporizador de maryun-pitr-diff
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

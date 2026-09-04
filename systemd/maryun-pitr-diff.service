@@ -1,0 +1,8 @@
+[Unit]
+Description=PITR: respaldo diferencial de la base del ERP
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/pitr.sh diff
