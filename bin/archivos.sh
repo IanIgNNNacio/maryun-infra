@@ -54,20 +54,34 @@ for v in R2_ENDPOINT R2_ORIGEN_BUCKET R2_ORIGEN_KEY_ID R2_ORIGEN_SECRET \
     [ -n "${!v:-}" ] || morir "falta $v en $CONFIG"
 done
 
+# Las variables de rclone se EXPORTAN aqui porque abajo se pasan con `-e VAR`
+# a secas, sin `=valor`: asi el secreto no aparece en la linea de comandos y por
+# tanto tampoco en `ps`. Es la regla 2 del punto 7 de SERVIDOR.md.
+export RCLONE_CONFIG_ORIGEN_TYPE=s3
+export RCLONE_CONFIG_ORIGEN_PROVIDER=Cloudflare
+export RCLONE_CONFIG_ORIGEN_ENDPOINT="$R2_ENDPOINT"
+export RCLONE_CONFIG_ORIGEN_ACCESS_KEY_ID="$R2_ORIGEN_KEY_ID"
+export RCLONE_CONFIG_ORIGEN_SECRET_ACCESS_KEY="$R2_ORIGEN_SECRET"
+export RCLONE_CONFIG_RESPALDO_TYPE=s3
+export RCLONE_CONFIG_RESPALDO_PROVIDER=Cloudflare
+export RCLONE_CONFIG_RESPALDO_ENDPOINT="$R2_ENDPOINT"
+export RCLONE_CONFIG_RESPALDO_ACCESS_KEY_ID="$R2_RESPALDO_KEY_ID"
+export RCLONE_CONFIG_RESPALDO_SECRET_ACCESS_KEY="$R2_RESPALDO_SECRET"
+
 # rclone se configura por variables de entorno, no por archivo: asi las
 # credenciales no quedan escritas en ningun sitio salvo el .env, que esta en 0640.
 rc() {
     docker run --rm \
         -e RCLONE_CONFIG_ORIGEN_TYPE=s3 \
         -e RCLONE_CONFIG_ORIGEN_PROVIDER=Cloudflare \
-        -e RCLONE_CONFIG_ORIGEN_ENDPOINT="$R2_ENDPOINT" \
-        -e RCLONE_CONFIG_ORIGEN_ACCESS_KEY_ID="$R2_ORIGEN_KEY_ID" \
-        -e RCLONE_CONFIG_ORIGEN_SECRET_ACCESS_KEY="$R2_ORIGEN_SECRET" \
+        -e RCLONE_CONFIG_ORIGEN_ENDPOINT \
+        -e RCLONE_CONFIG_ORIGEN_ACCESS_KEY_ID \
+        -e RCLONE_CONFIG_ORIGEN_SECRET_ACCESS_KEY \
         -e RCLONE_CONFIG_RESPALDO_TYPE=s3 \
         -e RCLONE_CONFIG_RESPALDO_PROVIDER=Cloudflare \
-        -e RCLONE_CONFIG_RESPALDO_ENDPOINT="$R2_ENDPOINT" \
-        -e RCLONE_CONFIG_RESPALDO_ACCESS_KEY_ID="$R2_RESPALDO_KEY_ID" \
-        -e RCLONE_CONFIG_RESPALDO_SECRET_ACCESS_KEY="$R2_RESPALDO_SECRET" \
+        -e RCLONE_CONFIG_RESPALDO_ENDPOINT \
+        -e RCLONE_CONFIG_RESPALDO_ACCESS_KEY_ID \
+        -e RCLONE_CONFIG_RESPALDO_SECRET_ACCESS_KEY \
         rclone/rclone:latest "$@" 2>&1
 }
 
