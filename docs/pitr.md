@@ -41,8 +41,21 @@ Con PITR la ventana pasa de 24 horas a **un minuto**.
         │
         │  rclone crypt, cada 15 minutos
         ▼
-  R2  ·  <bucket de respaldo>/pitr   ← cifrado en origen
+  R2  ·  maryun-erp-respaldo/pitr/   ← cifrado en origen
 ```
+
+El bucket `maryun-erp-respaldo` lo comparten dos cosas, cada una en su prefijo:
+
+| prefijo | qué | quién lo escribe |
+|---|---|---|
+| `pitr/` | la base: WAL + copias base, **cifrado** | `maryun-pitr-externo`, cada 15 min |
+| `adjuntos/` | los adjuntos del ERP, en claro | `maryun-archivos`, cada hora |
+
+**Los prefijos separados no son cosmética.** `archivos.sh` verifica que el
+destino no tenga menos objetos que el origen; cuando contaba el bucket entero,
+los objetos del PITR inflaban la cuenta y ese guardarraíl dejaba de servir —
+podía faltar la mitad de los adjuntos y seguir dando OK. Corregido el
+4-sep-2026, el mismo día que el PITR empezó a compartir el bucket.
 
 **El repositorio local es el único que toca `archive_command`, y es
 deliberado.** Si el archivado dependiera de la red, un corte de red haría que

@@ -82,7 +82,15 @@ log "=== copiando $R2_ORIGEN_BUCKET -> $R2_RESPALDO_BUCKET ==="
 #
 # --checksum compara por suma en vez de por fecha: R2 no siempre conserva la
 # fecha de modificacion al copiar entre buckets.
-salida="$(rc copy "origen:$R2_ORIGEN_BUCKET" "respaldo:$R2_RESPALDO_BUCKET" \
+# El destino lleva un prefijo propio, adjuntos/, y NO la raiz del bucket.
+#
+# Por que: desde el 4-sep-2026 el PITR de la base guarda en este mismo
+# bucket bajo pitr/. Contando el bucket entero, esos objetos inflaban la
+# cuenta y el guardarrail de mas abajo comparaba adjuntos contra
+# adjuntos-mas-PITR: podia faltar la mitad de los adjuntos y seguir dando OK.
+DESTINO="respaldo:$R2_RESPALDO_BUCKET/adjuntos"
+
+salida="$(rc copy "origen:$R2_ORIGEN_BUCKET" "$DESTINO" \
           --checksum --transfers 8 --stats-one-line --stats 1m)"
 codigo=$?
 echo "$salida" | tail -4 | while read -r l; do log "  $l"; done
@@ -95,15 +103,29 @@ contar() {
     rc size "$1" --json 2>/dev/null | tr -d '{}" ' | tr ',' '\n' | grep '^count:' | cut -d: -f2
 }
 ORIGEN_N="$(contar "origen:$R2_ORIGEN_BUCKET")"
-RESPALDO_N="$(contar "respaldo:$R2_RESPALDO_BUCKET")"
-log "  origen: ${ORIGEN_N:-?} objetos · respaldo: ${RESPALDO_N:-?}"
+RESPALDO_N="$(contar "$DESTINO")"
+log "  origen: ${ORIGEN_N:-?} objetos · respaldo/adjuntos: ${RESPALDO_N:-?}"
 
 if [ -n "$ORIGEN_N" ] && [ -n "$RESPALDO_N" ] && [ "$RESPALDO_N" -lt "$ORIGEN_N" ]; then
     morir "el respaldo tiene MENOS objetos que el origen: la copia quedo incompleta"
 fi
 
-log "=== copia terminada: ${RESPALDO_N:-?} objetos en el respaldo ==="
-avisar up "OK ${RESPALDO_N:-?} objetos"
+# Con el origen a 0 objetos no hay nada que verificar, y decir "OK N
+# objetos" seria enganoso: hasta el 4-sep-2026 ese N contaba los archivos
+# del PITR, que no son adjuntos. Mientras el ERP este en desarrollo y no
+# haya subido nada, el estado correcto es verde con el mensaje claro: un
+# monitor en rojo por algo esperado se acaba ignorando, y entonces no avisa
+# de lo que si importa. El guardarrail de arriba es el que protege de una
+# copia incompleta en cuanto empiecen a existir adjuntos.
+if [ "${ORIGEN_N:-0}" = "0" ]; then
+    log "=== el origen esta vacio: no hay adjuntos que respaldar todavia ==="
+    log "    el ERP escribe en $R2_ORIGEN_BUCKET (STORAGE_DRIVER=r2)"
+    avisar up "origen vacio: 0 adjuntos, nada que copiar"
+    exit 0
+fi
+
+log "=== copia terminada: ${RESPALDO_N:-?} adjuntos en el respaldo ==="
+avisar up "OK ${RESPALDO_N:-?} adjuntos"
 exit 0
 
 # ── NOTA sobre la proteccion del bucket de respaldo ─────────────────────────
