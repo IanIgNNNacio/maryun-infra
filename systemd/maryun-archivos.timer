@@ -1,9 +1,13 @@
 [Unit]
-Description=Dispara la copia de adjuntos cada 6 horas
+Description=Dispara la copia de adjuntos cada hora
 
 [Timer]
-# En el minuto 20 para no coincidir con el respaldo de las bases, que va a las 03:15.
-OnCalendar=*-*-* 00,06,12,18:20:00
+# Cada hora, en el minuto 20 para no coincidir con el respaldo de las bases, que
+# va a las 03:15. Antes era cada 6 horas; se bajo a 1 h el 4-sep-2026 cuando se
+# monto el PITR: la base pasa a una ventana de 1 minuto y los adjuntos (XML del
+# SII, imagenes) son lo que una restauracion de PostgreSQL NO devuelve. Cada
+# corrida es incremental y tarda 1-2 s, asi que el coste es despreciable.
+OnCalendar=*-*-* *:20:00
 RandomizedDelaySec=5m
 Persistent=true
 

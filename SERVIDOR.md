@@ -641,7 +641,7 @@ sigue siendo el respaldo diario.
 | temporizador | cuándo | qué hace |
 |---|---|---|
 | `maryun-respaldo` | 03:15 UTC | respaldo diario |
-| `maryun-archivos` | cada 6 h | copia los adjuntos del ERP a R2 |
+| `maryun-archivos` | cada hora | copia los adjuntos del ERP a R2 |
 | `maryun-pitr-full` | domingos 04:00 UTC | copia base completa de `maryun_erp` |
 | `maryun-pitr-diff` | 04:30 UTC | copia base diferencial de `maryun_erp` |
 | `maryun-pitr-externo` | cada 15 min | empuja el repositorio de PITR a R2, cifrado |

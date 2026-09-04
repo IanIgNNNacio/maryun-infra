@@ -290,8 +290,11 @@ El corte cae exactamente donde se pidió. La tabla de prueba se borró después.
 - **ClickHouse** no tiene PITR y no lo va a tener. Su ventana sigue siendo de
   24 horas.
 - **Los adjuntos del ERP** (XML del SII, imágenes) van por otro camino:
-  `maryun-archivos.timer`, cada 6 horas a R2. Un volcado de PostgreSQL devuelve
-  filas, no devuelve un objeto borrado de un bucket.
+  `maryun-archivos.timer`, **cada hora** a R2. Un volcado de PostgreSQL devuelve
+  filas, no devuelve un objeto borrado de un bucket. Se bajó de 6 h a 1 h el
+  mismo día que se montó el PITR: con la base en una ventana de un minuto, los
+  adjuntos pasaban a ser el eslabón lento de la cadena. Cada corrida es
+  incremental y tarda 1-2 segundos.
 - **El respaldo diario sigue existiendo** y debe seguir existiendo: el PITR
   protege de la corrupción y del error humano dentro de la ventana de retención,
   pero un volcado lógico es lo que salva de un fallo de formato del propio motor
