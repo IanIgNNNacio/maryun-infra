@@ -3,11 +3,20 @@
 # PITR de la base del ERP — recuperacion a un instante cualquiera.
 #
 # Que resuelve. Hasta ahora el unico respaldo de maryun_erp era el volcado
-# diario de las 03:15 UTC, o sea una ventana de perdida de hasta 24 horas. El
-# ERP emite unos 3.100 documentos al SII cada dia y un DTE aceptado no se puede
-# des-enviar: restaurar al volcado de ayer deja la base sin facturas que el SII
-# si tiene, con folios quemados que la base cree libres. Eso se arregla a mano,
-# folio por folio. Con PITR la ventana baja a un minuto (archive_timeout=60).
+# diario de las 03:15 UTC, o sea una ventana de perdida de hasta 24 horas. Con
+# PITR la ventana baja a un minuto (archive_timeout=60).
+#
+# CORRECCION 4-sep-2026: al montar esto se dijo que el ERP "emite unos 3.100
+# documentos al SII cada dia". Es falso. Los 21.904 SiiDocument se crearon todos
+# el 1 de septiembre en la importacion de la migracion, y son todos de COMPRA:
+# cosechados del RCV, no emitidos. Hoy el ERP no emite nada -Caf, SaleDte,
+# DteResponse, Sale y SiiConsumoFolios estan a 0- asi que no hay folios en
+# juego todavia.
+#
+# El argumento sigue en pie pero es a futuro: un DTE aceptado no se puede
+# des-enviar, y restaurar al volcado de ayer dejaria la base sin facturas que el
+# SII si tiene, con folios quemados que la base cree libres. Conviene tener esto
+# montado y ensayado ANTES de que la emision entre en marcha, no despues.
 #
 # Como esta montado:
 #

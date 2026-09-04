@@ -1,0 +1,80 @@
+name: coolify-proxy
+networks:
+  coolify:
+    external: true
+services:
+  traefik:
+    container_name: coolify-proxy
+    image: 'traefik:v3.6'
+    restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    networks:
+      - coolify
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+      - '8080:8080'
+    healthcheck:
+      test: 'wget -qO- http://localhost:80/ping || exit 1'
+      interval: 4s
+      timeout: 2s
+      retries: 5
+    environment:
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+      # Cuanto esperar a que el registro TXT se vea en los resolutores
+      # publicos antes de pedirle a Let's Encrypt que valide. Con el valor
+      # por omision, pedir varios certificados a la vez hace que algunos
+      # se comprueben demasiado pronto y fallen con NXDOMAIN.
+      - CLOUDFLARE_PROPAGATION_TIMEOUT=180
+      - CLOUDFLARE_POLLING_INTERVAL=10
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+      - '/data/coolify/proxy/:/traefik'
+    command:
+      - '--ping=true'
+      # Registro de acceso. Sin esto no hay forma de saber si una peticion
+      # llego: nginx de Coolify tiene access_log off y la aplicacion no
+      # anota los webhooks. Un webhook rebotado y un webhook que nunca
+      # llego se veian exactamente igual, que es nada.
+      - '--accesslog=true'
+      - '--accesslog.format=json'
+      - '--accesslog.filepath=/traefik/acceso.log'
+      # El sondeo propio de Traefik llenaria el archivo de /ping.
+      - '--accesslog.filters.minduration=0ms'
+      - '--log.level=INFO'
+      - '--ping.entrypoint=http'
+      - '--api.dashboard=true'
+      - '--entrypoints.http.address=:80'
+      - '--entrypoints.https.address=:443'
+      - '--entrypoints.http.http.encodequerysemicolons=true'
+      - '--entryPoints.http.http2.maxConcurrentStreams=250'
+      - '--entrypoints.https.http.encodequerysemicolons=true'
+      - '--entrypoints.https.http.middlewares=freno-borde@file'
+      - '--entrypoints.https.forwardedHeaders.trustedIPs=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22'
+      - '--entrypoints.http.forwardedHeaders.trustedIPs=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22'
+      - '--entryPoints.https.http2.maxConcurrentStreams=250'
+      - '--entrypoints.https.http3'
+      - '--providers.file.directory=/traefik/dynamic/'
+      - '--providers.file.watch=true'
+      # Emisor por validacion DNS, para los nombres que apuntan a la VPN
+      # (10.8.0.1). Let's Encrypt no puede alcanzar una IP privada por HTTP,
+      # pero si comprobar un registro TXT en la zona de Cloudflare.
+      - '--certificatesresolvers.cfdns.acme.dnschallenge=true'
+      - '--certificatesresolvers.cfdns.acme.dnschallenge.provider=cloudflare'
+      - '--certificatesresolvers.cfdns.acme.email=ian.alrringo@maryun.cl'
+      - '--certificatesresolvers.cfdns.acme.storage=/traefik/acme-dns.json'
+      - '--certificatesresolvers.letsencrypt.acme.httpchallenge=true'
+      - '--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=http'
+      - '--certificatesresolvers.letsencrypt.acme.storage=/traefik/acme.json'
+      - '--api.insecure=false'
+      - '--providers.docker=true'
+      - '--providers.docker.exposedbydefault=false'
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.traefik.entrypoints=http
+      - traefik.http.routers.traefik.service=api@internal
+      - traefik.http.services.traefik.loadbalancer.server.port=8080
+      - coolify.managed=true
+      - coolify.proxy=true

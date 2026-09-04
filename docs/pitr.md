@@ -10,11 +10,25 @@ Recuperación a un instante cualquiera (*point-in-time recovery*) para
 Antes de esto el único respaldo de la base del ERP era el volcado diario de las
 03:15 UTC. La ventana de pérdida era de **hasta 24 horas**.
 
-El problema no es el volumen de trabajo perdido, es que **el SII no olvida**. El
-ERP emite unos 3.100 documentos tributarios al día y los manda al SII, que los
-guarda. Un DTE aceptado no se puede des-enviar.
+El problema no es el volumen de trabajo perdido, es que **el SII no olvida**: un
+DTE aceptado no se puede des-enviar.
 
-Si se restaura al volcado de ayer:
+> **Corrección del 4-sep-2026.** Al montar esto se dijo que el ERP «emite unos
+> 3.100 documentos al día». **Es falso y la cifra estaba mal deducida.** Los
+> 21.904 `SiiDocument` se crearon **todos el 1 de septiembre**, en la
+> importación única de la migración, y son todos de `COMPRA`: documentos
+> *cosechados del* RCV, no emitidos. Dividir 21.904 entre los 7 días de la
+> ventana dio un promedio de 3.129/día que no corresponde a ningún flujo real.
+>
+> Hoy el ERP **no emite nada**: `Caf`, `SaleDte`, `DteResponse`, `Sale` y
+> `SiiConsumoFolios` están todas a 0. No hay folios en juego todavía.
+>
+> Lo que sigue describe el riesgo **para cuando la emisión entre en marcha**, que
+> es la razón por la que conviene tener esto montado y ensayado **antes** y no
+> después. El PITR no se justifica hoy por el volumen: se justifica porque
+> ponerlo en marcha con la facturación ya viva es mucho peor momento.
+
+Cuando la emisión esté activa, restaurar al volcado de ayer significa:
 
 - La base **no conoce** las facturas emitidas hoy. El SII sí.
 - Los folios que la base cree libres el SII ya los tiene usados. Reemitirlos es
@@ -128,14 +142,31 @@ documentado en [`preview.md`](preview.md).
 | Base `maryun_erp` | 292 MB |
 | Copia completa comprimida | **127,6 MB** (de 539,3 MB, con zstd) |
 | Tiempo de una copia completa | **2,5 segundos** |
-| WAL generado | ~612 MB/día antes de comprimir |
+| WAL generado | ver la nota de abajo — la primera medición no servía |
 | Repositorio local tras el primer completo | 132 MB |
 | Retención local | **30 días** (por tiempo, no por número de copias) |
 | Retención en R2 | **30 días** |
 | Espacio libre en `/srv` | 453 GB |
 
-Con esta retención el repositorio se estabiliza en el orden de **5 a 10 GB**.
-El espacio no es una restricción aquí.
+**Sobre el WAL, con las cifras corregidas.** Los «612 MB/día» que se midieron
+al principio salían de una ventana que incluía la importación masiva del 1 de
+septiembre: no era el ritmo normal. El ERP en desarrollo genera muy poco.
+
+Lo que sí genera WAL en serio es **el refresco horario de preview**: cada pasada
+recrea `maryun_erp_preview` entera y eso son **193 MB de WAL medidos**, o
+**4,5 GB/día**. Como preview vive en el mismo cluster que producción, ese WAL
+entra en el archivo igual que el de producción — no se puede excluir por base,
+el WAL es de todo el cluster.
+
+Consecuencia: la mayor parte del repositorio de PITR acaba siendo WAL dedicado a
+reconstruir una copia desechable. Cabe de sobra en los 453 GB libres, pero
+alarga las restauraciones (hay que reproducir ese WAL para llegar a cualquier
+instante) y roza los umbrales de `vigilar-pitr.sh` cada hora.
+
+**Pendiente de decidir:** mover `maryun_erp_preview` a su propia instancia de
+PostgreSQL, sin archivado, como ya está `dwh-postgres`. Es la solución limpia y
+además aísla preview de producción. Las alternativas son refrescar preview una
+vez al día en vez de cada hora (24 veces menos WAL) o aceptarlo tal cual.
 
 ---
 
