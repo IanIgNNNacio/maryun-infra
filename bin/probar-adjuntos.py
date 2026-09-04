@@ -142,16 +142,42 @@ for n in nominas:
 
 # Dos archivos: un PDF y un PNG. El PDF va con acento en el nombre a proposito,
 # para ver que hace sanitize() con el.
-PDF = (b"%PDF-1.4\n"
-       b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-       b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
-       b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]"
-       b"/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n"
-       b"4 0 obj<</Length 68>>stream\n"
-       b"BT /F1 12 Tf 20 50 Td (Adjunto de prueba - maryun ERP) Tj ET\n"
-       b"endstream endobj\n"
-       b"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n"
-       b"trailer<</Root 1 0 R>>\n%%EOF\n")
+def pdf_minimo():
+    """Un PDF valido de verdad, con tabla xref y desplazamientos correctos.
+
+    La primera version de esta prueba escribia el PDF a mano, sin xref ni
+    startxref. Empezaba por %PDF-1.4 y `file` lo daba por bueno, pero ningun
+    visor lo abre: Chrome mostraba el icono de archivo roto y parecia un fallo
+    del ERP cuando el problema era el archivo de prueba. Los desplazamientos se
+    calculan aqui para que no puedan quedar mal.
+    """
+    contenido = b"BT /F1 14 Tf 20 60 Td (Adjunto de prueba - maryun ERP) Tj ET\n"
+    objetos = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 320 120]"
+        b"/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>",
+        b"<</Length " + str(len(contenido)).encode() + b">>stream\n"
+        + contenido + b"endstream",
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    salida = bytearray(b"%PDF-1.4\n")
+    desplazamientos = []
+    for i, o in enumerate(objetos, start=1):
+        desplazamientos.append(len(salida))
+        salida += str(i).encode() + b" 0 obj" + o + b"\nendobj\n"
+    inicio_xref = len(salida)
+    salida += b"xref\n0 " + str(len(objetos) + 1).encode() + b"\n"
+    salida += b"0000000000 65535 f \n"
+    for d in desplazamientos:
+        salida += ("%010d 00000 n \n" % d).encode()
+    salida += (b"trailer<</Size " + str(len(objetos) + 1).encode()
+               + b"/Root 1 0 R>>\nstartxref\n" + str(inicio_xref).encode()
+               + b"\n%%EOF\n")
+    return bytes(salida)
+
+
+PDF = pdf_minimo()
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKklEQVR42mNkYPhfz0BBYBxV"
     "MKpgVMGoglEFowpGFYwqGFUwqmBUAQMDAJb+D/HrDh2zAAAAAElFTkSuQmCC")
