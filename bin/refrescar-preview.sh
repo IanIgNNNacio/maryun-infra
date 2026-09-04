@@ -3,28 +3,36 @@
 # Refresca el entorno de preview del ERP con los datos de produccion.
 #
 # Para que: en preview se prueba antes de pasar a produccion, y sin datos reales
-# las pruebas no reproducen los casos que importan. Esto reemplaza al
-# scripts/replica/sync.sh del VPS viejo, que traia produccion desde Neon cada
-# hora y de paso podia refrescar preview. Ese dependia de Neon y de Vercel, que
-# ya no existen; aqui las dos bases viven en el mismo PostgreSQL, asi que la
-# copia es local y tarda segundos.
+# las pruebas no reproducen los casos que importan. Sustituye al
+# scripts/replica/sync.sh del VPS viejo, que traia produccion desde Neon y de
+# paso podia refrescar preview. Aquel dependia de Neon y de Vercel, que ya no
+# existen.
 #
-#   maryun_erp        --(pg_dump | pg_restore)-->  maryun_erp_preview
-#   R2 maryun-erp     --(rclone sync)----------->  R2 maryun-erp-preview
+#   maryun-erp-db      --(pg_dump | pg_restore)-->  maryun-erp-preview-db
+#   R2 maryun-erp      --(rclone sync)----------->  R2 maryun-erp-preview
+#
+# Son DOS instancias de PostgreSQL distintas desde el 4-sep-2026, no dos bases
+# dentro de la misma. El motivo: el WAL es del cluster entero, asi que con
+# preview dentro del motor de produccion cada refresco metia ~193 MB de WAL en
+# el archivo del PITR -medido- y de ahi salia cifrado a R2. Gigabytes al mes
+# para poder recuperar una copia desechable, y restauraciones mas lentas. La
+# instancia de preview no tiene archive_mode, asi que ese WAL ya no existe.
+#
+# Por eso tambien pasa a ser DIARIO y no cada hora: el objetivo es tener datos
+# recientes para probar, no un espejo al minuto.
 #
 # Se copia TODO, sin anonimizar: decision de Ian el 4-sep-2026. El control de
-# acceso de preview es el mismo que el de produccion -el mismo login- y solo dos
-# personas entran, asi que copiar en claro no amplia la exposicion.
+# acceso de preview es el mismo que el de produccion -el mismo login- y solo
+# entran dos personas, asi que copiar en claro no amplia la exposicion.
 #
 # Por que `sync` y no `copy` en el bucket, al contrario que en el respaldo: el
 # respaldo debe conservar lo que se borro en produccion, pero preview tiene que
 # ser un ESPEJO. Con `copy` iria acumulando objetos huerfanos de pruebas viejas
 # cuyas filas ya no existen en la base recien restaurada.
 #
-# Al terminar se reinicia el contenedor de preview. No es cosmetica: su
-# entrypoint aplica las migraciones pendientes al arrancar, asi que si la rama
-# de preview tiene migraciones que produccion todavia no tiene, el reinicio las
-# vuelve a aplicar sobre los datos recien copiados.
+# Al terminar se reinicia el contenedor de preview: su entrypoint aplica las
+# migraciones pendientes al arrancar, y la rama de preview suele ir por delante
+# de produccion.
 #
 # PARA CONGELAR PREVIEW mientras se prueba algo:
 #
@@ -36,7 +44,8 @@
 
 set -uo pipefail
 
-CONTENEDOR_DB=maryun-erp-db
+ORIGEN_CONT=maryun-erp-db
+DESTINO_CONT=maryun-erp-preview-db
 ORIGEN=maryun_erp
 DESTINO=maryun_erp_preview
 CENTINELA=/srv/PREVIEW-CONGELADO
@@ -62,11 +71,11 @@ telegram() {
 morir() { log "ERROR: $*"; telegram "Refresco de preview - $*"; exit 1; }
 
 # ─────────────────────────────────────────────────────────── guardarrailes ──
-# Esto BORRA una base entera. El nombre del destino se comprueba literalmente
-# antes de tocar nada: un despiste con la variable no puede acabar en
-# produccion.
+# Esto BORRA una base entera. Los nombres se comprueban literalmente antes de
+# tocar nada: un despiste con una variable no puede acabar en produccion.
 [ "$DESTINO" = "maryun_erp_preview" ] || morir "el destino no es la base de preview: $DESTINO"
-[ "$DESTINO" != "$ORIGEN" ] || morir "origen y destino son la misma base"
+[ "$DESTINO_CONT" = "maryun-erp-preview-db" ] || morir "el destino no es la instancia de preview: $DESTINO_CONT"
+[ "$DESTINO_CONT" != "$ORIGEN_CONT" ] || morir "origen y destino son la misma instancia"
 
 if [ -e "$CENTINELA" ] && [ "$FORZAR" = 0 ]; then
     log "preview congelado ($CENTINELA existe), no se refresca"
@@ -76,39 +85,46 @@ fi
 exec 9>/var/lock/maryun-preview.lock
 flock -n 9 || { log "ya hay un refresco en marcha, salgo"; exit 0; }
 
-docker inspect "$CONTENEDOR_DB" >/dev/null 2>&1 || morir "no existe el contenedor $CONTENEDOR_DB"
+docker inspect "$ORIGEN_CONT" >/dev/null 2>&1 || morir "no existe el contenedor $ORIGEN_CONT"
+docker inspect "$DESTINO_CONT" >/dev/null 2>&1 || morir "no existe el contenedor $DESTINO_CONT"
+
+# Que la instancia de preview NO archive WAL es la razon de que exista aparte.
+# Si alguien se la activa, este aviso lo deja escrito antes de que nadie se
+# pregunte por que vuelve a crecer el repositorio del PITR.
+archivado="$(docker exec "$DESTINO_CONT" psql -U maryun -d postgres -tAc \
+    "SELECT current_setting('archive_mode')" 2>/dev/null | tr -d ' ')"
+[ "$archivado" = "on" ] && log "  AVISO: la instancia de preview tiene archive_mode=on; no deberia"
 
 log "=== refresco de preview"
 
-# ────────────────────────────────────────────────────────────── la base ──
-antes="$(docker exec "$CONTENEDOR_DB" psql -U maryun -d postgres -tAc \
+# ─────────────────────────────────────────────────────────────── la base ──
+antes="$(docker exec "$DESTINO_CONT" psql -U maryun -d postgres -tAc \
     "SELECT pg_size_pretty(pg_database_size('$DESTINO'))" 2>/dev/null)"
 log "  preview antes: ${antes:-no existia}"
 
 # WITH (FORCE) corta las conexiones abiertas de la aplicacion de preview. Sin
-# eso el DROP se queda esperando indefinidamente a que suelten la base.
-docker exec "$CONTENEDOR_DB" psql -U maryun -d postgres -q \
+# eso el DROP espera indefinidamente a que suelten la base.
+docker exec "$DESTINO_CONT" psql -U maryun -d postgres -q \
     -c "DROP DATABASE IF EXISTS $DESTINO WITH (FORCE)" \
     -c "CREATE DATABASE $DESTINO OWNER maryun" \
     || morir "no se pudo recrear la base de preview"
 
-# Tuberia directa, sin archivo intermedio: lo que sale del volcado entra en la
-# restauracion. Son unos 6 segundos para 289 MB.
-#
-# El estado se captura ANTES de filtrar la salida. Encadenar el docker exec a un
-# grep o un tail hace que $? sea el del filtro, que casi siempre acierta, y el
-# fallo real pasa desapercibido.
-salida_db="$(docker exec "$CONTENEDOR_DB" sh -c \
-    "pg_dump -U maryun -Fc -d $ORIGEN | pg_restore -U maryun -d $DESTINO --no-owner --no-privileges" 2>&1)"
+# Tuberia entre los dos contenedores, sin archivo intermedio. El estado se
+# captura ANTES de filtrar la salida: encadenar esto a un grep o un tail hace
+# que $? sea el del filtro, que casi siempre acierta, y el fallo real pasa
+# desapercibido.
+salida_db="$(docker exec "$ORIGEN_CONT" pg_dump -U maryun -Fc -d "$ORIGEN" \
+    | docker exec -i "$DESTINO_CONT" pg_restore -U maryun -d "$DESTINO" \
+        --no-owner --no-privileges 2>&1)"
 codigo_db=$?
 [ -n "$salida_db" ] && printf '%s\n' "$salida_db" | tail -5 | sed 's/^/    /'
 [ "$codigo_db" -eq 0 ] || morir "fallo la copia de la base a preview"
 
-filas="$(docker exec "$CONTENEDOR_DB" psql -U maryun -d "$DESTINO" -tAc \
+filas="$(docker exec "$DESTINO_CONT" psql -U maryun -d "$DESTINO" -tAc \
     "SELECT count(*) FROM \"SiiDocument\"" 2>/dev/null)"
 [ -n "$filas" ] && [ "$filas" -gt 0 ] 2>/dev/null \
     || morir "la base de preview quedo vacia o no responde"
-despues="$(docker exec "$CONTENEDOR_DB" psql -U maryun -d postgres -tAc \
+despues="$(docker exec "$DESTINO_CONT" psql -U maryun -d postgres -tAc \
     "SELECT pg_size_pretty(pg_database_size('$DESTINO'))")"
 log "  base copiada: $despues, $filas documentos del SII"
 
@@ -153,9 +169,9 @@ for c in $(docker ps --format '{{.Names}}'); do
     case "$u" in *"$DESTINO"*) APP="$c"; break;; esac
 done
 if [ -n "$APP" ]; then
-    # Su entrypoint aplica las migraciones pendientes al arrancar: si la rama de
-    # preview tiene migraciones que produccion no tiene, se vuelven a aplicar
-    # sobre los datos recien copiados.
+    # Su entrypoint aplica las migraciones pendientes al arrancar: la rama de
+    # preview suele tener migraciones que produccion todavia no tiene, y el
+    # volcado trae el _prisma_migrations de produccion.
     docker restart "$APP" >/dev/null && log "  aplicacion de preview reiniciada ($APP)" \
         || log "  AVISO: no se pudo reiniciar $APP"
 else

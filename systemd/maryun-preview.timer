@@ -2,10 +2,15 @@
 Description=Temporizador del refresco de preview
 
 [Timer]
-# Cada hora en el minuto 40. Los demas minutos estan ocupados: :00/:15/:30/:45
-# el PITR a R2, :20 los adjuntos, 03:15 el respaldo diario.
-OnCalendar=*-*-* *:40:00
-RandomizedDelaySec=120
+# DIARIO, no cada hora. Preview vive en su propia instancia de PostgreSQL sin
+# archivado, asi que ya no ensucia el WAL de produccion; pero recrear 265 MB
+# tampoco hace falta 24 veces al dia. El objetivo es tener datos recientes para
+# probar, no un espejo al minuto.
+#
+# 05:10 UTC: despues del respaldo diario (03:15) y del diferencial del PITR
+# (04:30), antes de mysis_full_reload_tab_cmp (05:30).
+OnCalendar=*-*-* 05:10:00
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]

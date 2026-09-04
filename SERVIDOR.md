@@ -320,6 +320,7 @@ desde ahí, no las copies a ningún sitio.
 |---|---|---|---|---|
 | ClickHouse | `10.8.0.1:8123` (HTTP), `:9000` (nativo) | `clickhouse:8123` / `:9000` | `admin`, `bi`, `mage`, `mcp`, `default` | `clickhouse.env` |
 | Postgres del ERP | `10.8.0.1:5433` | `maryun-erp-db:5432` | `maryun`, `dwh_lector` | `maryun-erp-db.env`, `dwh-lector.env` |
+| Postgres de preview | `10.8.0.1:5435` | `maryun-erp-preview-db:5432` | `maryun` | `maryun-erp-preview-db.env` |
 | Postgres espejo | `10.8.0.1:5434` | `dwh-postgres:5432` | `dwh`, `bi_lector` | `dwh-postgres.env` |
 | MySis (el ERP viejo) | `10.8.0.1:3307` | `mysis_tunnel:3306` | `appread` (**sólo lectura**) | en `io_config.yaml` de Mage |
 
@@ -648,7 +649,7 @@ sigue siendo el respaldo diario.
 | `maryun-pitr-vigilar` | cada 10 min | vigila el archivado de WAL, `pg_wal` y el espacio |
 | `maryun-pitr-ensayo` | 1.er domingo de mes | **restaura de verdad** y avisa si falla |
 | `maryun-espejo-postgres` | 07:30 UTC | refresca el Postgres espejo |
-| `maryun-preview` | cada hora, min. 40 | copia producción a preview (base y bucket) y reinicia la aplicación. Se salta si existe `/srv/PREVIEW-CONGELADO`. Detalle en [`docs/preview.md`](docs/preview.md) |
+| `maryun-preview` | 05:10 UTC | copia producción a preview (base y bucket) y reinicia la aplicación. Se salta si existe `/srv/PREVIEW-CONGELADO`. Detalle en [`docs/preview.md`](docs/preview.md) |
 | `maryun-discos` | diario | lee el SMART de los NVMe |
 | `maryun-red` | cada minuto | registra caídas de red con su duración |
 | `maryun-arranque` | al arrancar | anota si la caída fue en seco y cuánto duró |

@@ -7,19 +7,36 @@ septiembre de 2026.
 
 ## 1 · Qué hace
 
-Cada hora, en el minuto 40, `maryun-preview.timer` copia producción a preview:
+Cada día a las 05:10 UTC, `maryun-preview.timer` copia producción a preview:
 
 ```
-  maryun_erp        ──(pg_dump | pg_restore)──►  maryun_erp_preview
+  maryun-erp-db     ──(pg_dump | pg_restore)──►  maryun-erp-preview-db
   R2 maryun-erp     ──(rclone sync)──────────►  R2 maryun-erp-preview
                                                         │
                                                         ▼
                                         se reinicia la aplicación de preview
 ```
 
-Tarda unos **9 segundos** de punta a punta: 289 MB de base y el bucket
-completo. Las dos bases viven en el mismo PostgreSQL, así que la copia no sale
-de la máquina.
+Tarda unos **8 segundos** de punta a punta: 289 MB de base y el bucket completo.
+Las dos instancias viven en la misma máquina, así que la copia no sale de ella.
+
+### Son dos instancias de PostgreSQL, no dos bases
+
+`maryun-erp-preview-db` es un motor aparte, en `10.8.0.1:5435`, **sin
+`archive_mode`**.
+
+Al principio preview era otra base dentro de `maryun-erp-db`. El problema es que
+**el WAL es del cluster entero, no de una base**: cada refresco recrea preview
+por completo, y eso son **193 MB de WAL medidos**. A una pasada por hora, 4,5
+GB/día entrando en el archivo del PITR y saliendo cifrados a R2 — gigabytes al
+mes para poder recuperar una copia desechable, restauraciones más lentas, y los
+umbrales de `vigilar-pitr.sh` rozándose cada hora.
+
+Medido después de separarlas: **un refresco completo genera 0 MB de WAL en
+producción**.
+
+El respaldo de preview es el propio refresco. Si esa instancia se pierde, se
+reconstruye en 8 segundos.
 
 ```bash
 sudo /srv/bin/refrescar-preview.sh            # refrescar ahora
@@ -29,7 +46,7 @@ sudo /srv/bin/refrescar-preview.sh --forzar   # aunque esté congelado
 ## 2 · Congelar preview mientras pruebas
 
 Un refresco **borra la base de preview entera**. Si estás probando algo con
-datos que no quieres perder al cambiar la hora:
+datos que no quieres perder al día siguiente:
 
 ```bash
 sudo touch /srv/PREVIEW-CONGELADO   # el refresco se salta y lo deja escrito
@@ -82,6 +99,24 @@ Al revés no pasa: **preview siempre va por delante de producción**, nunca al
 contrario. Es la dirección natural del flujo —se prueba en preview y luego se
 promueve— y por eso el reinicio basta: sólo hay que aplicar hacia adelante.
 
+### `DIRECT_URL` también apunta a la base, y es fácil olvidarla
+
+El `schema.prisma` declara dos conexiones:
+
+```prisma
+url       = env("DATABASE_URL")  // runtime
+directUrl = env("DIRECT_URL")    // migraciones
+```
+
+Es una herencia de Neon, donde la conexión agrupada y la directa eran hosts
+distintos. Al mover preview de instancia se cambió `DATABASE_URL` y **no**
+`DIRECT_URL`, así que la aplicación leía de la instancia nueva pero
+`prisma migrate deploy` seguía yendo a la de producción: **cada reinicio de
+preview volvía a crear ahí una base `maryun_erp_preview` vacía**. Se borraba y
+reaparecía sola.
+
+Si algún día se vuelve a mover la base, hay que cambiar **las dos**.
+
 ### El contenedor se busca por su `DATABASE_URL`
 
 Coolify le pone un sufijo aleatorio al nombre y cambia en cada despliegue, así
@@ -121,7 +156,10 @@ producción.
 
 | | |
 |---|---|
-| Base `maryun_erp_preview` | cubierta: va en el mismo cluster, así que la protegen el PITR y el volcado diario |
-| Bucket `maryun-erp-preview` | **no se respalda**, y es correcto: se regenera solo en el refresco siguiente |
+| Base `maryun_erp_preview` | **no se respalda**, y es correcto: está en su propia instancia sin archivado y el refresco la reconstruye en 8 segundos |
+| Bucket `maryun-erp-preview` | **no se respalda**, por lo mismo |
+
+Sí entra en el volcado diario de `respaldo.sh`, que recorre todos los Postgres
+del servidor — no hace falta excluirla, son 34 MB comprimidos.
 
 Ver [`pitr.md`](pitr.md) para el detalle de los respaldos de la base.

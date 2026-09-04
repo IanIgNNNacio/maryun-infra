@@ -1,0 +1,83 @@
+name: maryun-erp-preview-db
+
+# PostgreSQL SOLO para el entorno de preview del ERP.
+#
+# Por que una instancia aparte y no otra base dentro de maryun-erp-db:
+# el WAL es del cluster entero, no de una base. Preview se recrea cada vez que
+# se refresca desde produccion, y cada recreacion son ~193 MB de WAL. Con
+# preview dentro del mismo motor que produccion, todo ese WAL entraba en el
+# archivo del PITR y salia cifrado a R2 cada 15 minutos: gigabytes al mes
+# dedicados a poder recuperar una copia desechable, y restauraciones mas lentas
+# porque hay que reproducirlo.
+#
+# Aqui NO hay archive_mode. Si esta base se pierde, el refresco la reconstruye
+# desde produccion en segundos. Ese es todo su respaldo, y es suficiente.
+#
+# Montado el 4-sep-2026. Detalle en maryun-infra/docs/preview.md.
+
+services:
+  db:
+    image: postgres:18.6
+    container_name: maryun-erp-preview-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ}
+
+    # Solo por la VPN, como el resto. Puerto distinto del de produccion (5433)
+    # para poder tener las dos abiertas a la vez en un cliente de base de datos.
+    ports:
+      - "10.8.0.1:5435:5432"
+
+    volumes:
+      - /srv/stacks/maryun-erp-preview-db/db:/var/lib/postgresql
+
+    # Mas modesto que produccion: es un entorno de pruebas con dos usuarios.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=1536MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      # max_connections tiene que ser >= al de produccion (200). No es capricho:
+      # el volcado de produccion se restaura aqui, y PostgreSQL se niega a
+      # arrancar una recuperacion con menos plazas de las que tenia el origen.
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "log_min_duration_statement=2000"
+      # SIN archive_mode: esa es la razon de ser de esta instancia.
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+    networks: [data, coolify]
+
+networks:
+  data:
+    name: data
+    external: true
+  # La aplicacion de preview la gestiona Coolify y vive en esa red: necesita
+  # alcanzar esta base por su nombre de contenedor.
+  coolify:
+    name: coolify
+    external: true
