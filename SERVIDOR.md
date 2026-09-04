@@ -414,7 +414,78 @@ comprometido pudo leerlos. Por eso el directorio es `0750` y de `root`.
 `RECUPERACION.txt` es el documento con lo necesario para recuperar los respaldos
 cifrados. Si se pierde, los respaldos externos son ilegibles.
 
-Ayuda: `sudo /srv/bin/secretos.sh`.
+### Cómo se usan en la práctica
+
+**Un compose nunca lleva credenciales dentro.** Las declara y las recibe:
+
+```yaml
+services:
+  miapp:
+    env_file:
+      - /srv/secrets/miapp.env      # el contenedor recibe TODO el archivo
+    environment:
+      DB_HOST: postgres             # esto no es secreto, va aquí
+      DB_PASSWORD: ${MIAPP_PASS}    # esto se sustituye al levantar
+```
+
+La sustitución de `${...}` la hace `docker compose` al leer el compose, y para eso
+hay que decirle de dónde:
+
+```bash
+sudo docker compose --env-file /srv/secrets/miapp.env up -d
+```
+
+Son dos mecanismos distintos y conviene no confundirlos: `env_file` inyecta
+variables **dentro del contenedor**; `--env-file` alimenta la **sustitución en el
+propio compose**. Muchos stacks de aquí usan los dos.
+
+**Crear uno:**
+
+```bash
+sudo touch /srv/secrets/miapp.env
+sudo chown root:maryun /srv/secrets/miapp.env
+sudo chmod 640 /srv/secrets/miapp.env
+sudo nano /srv/secrets/miapp.env
+```
+
+**Leer un valor sin exponerlo.** Cárgalo en un subshell y úsalo ahí; nunca lo
+imprimas ni lo pases como argumento:
+
+```bash
+sudo sh -c '. /srv/secrets/dwh-postgres.env && \
+  docker exec -i -e PGPASSWORD="$PG_DWH_PASS" dwh-postgres psql -U dwh -d dwh_espejo -X -f -' <<'SQL'
+SELECT 1;
+SQL
+```
+
+Para generar uno nuevo: `head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32`.
+
+**Rotar** es siempre el mismo baile: crear la credencial nueva en el servicio,
+comprobar que funciona, **después** borrar la vieja, y sólo entonces actualizar el
+`.env` y recrear el contenedor. En ese orden: si borras primero y la nueva falla,
+te quedas fuera.
+
+### La bóveda cifrada
+
+Además de los `.env` en claro —protegidos por permisos— hay una **bóveda cifrada
+en reposo**: `/srv/secrets/boveda.yaml.age`, cifrada con `age` contra
+`respaldo-age.pub`.
+
+```bash
+sudo /srv/bin/secretos.sh ver          # lista los NOMBRES de las claves, nunca los valores
+sudo /srv/bin/secretos.sh leer NOMBRE  # imprime un valor concreto
+sudo /srv/bin/secretos.sh editar       # abre el editor con el contenido descifrado
+```
+
+Al guardar, se vuelve a cifrar solo. El archivo temporal vive en `/dev/shm`, que
+es memoria: **el texto en claro no toca el disco en ningún momento**.
+
+Es el mecanismo de SOPS hecho a mano, y está así a propósito, como paso previo a
+decidir si se adopta SOPS de verdad. Lo que SOPS añadiría, por si se plantea:
+cifra **valor por valor** en vez del archivo entero —así el diff de git muestra
+qué clave cambió sin revelar ninguna—, admite varias llaves a la vez, y trae
+`sops exec-env`, que inyecta las variables a un proceso sin escribirlas nunca a
+disco.
 
 ### No expongas nada que no haga falta
 
@@ -717,10 +788,97 @@ primero y validó después dejó un script roto en el disco.
 
 ---
 
-## 13 · Dónde seguir leyendo
+## 13 · `maryun-infra`: el repositorio de la infraestructura
 
-Todo vive en el repositorio **`maryun-infra`**, montado en `/srv/infra`
-(remoto `github-infra:IanIgNNNacio/maryun-infra.git`).
+### Qué es y por qué existe
+
+Un repositorio git que describe **cómo se levanta este servidor**. La idea es que
+si mañana se pierde la máquina, reconstruirla sea *clonar esto y cargar los
+secretos*, no reconstruir de memoria.
+
+No es una precaución abstracta. Durante la migración desde el VPS anterior se
+descubrió que los **67 pipelines de Mage existían sólo en ese disco**, sin copia
+en ningún repositorio. Este repositorio existe para no repetirlo con la
+infraestructura.
+
+### Dónde vive
+
+| | |
+|---|---|
+| En el servidor | `/srv/infra` — **es la copia de trabajo**, no un destino de despliegue |
+| Remoto | `git@github-infra:IanIgNNNacio/maryun-infra.git` |
+| En el PC de Ian | `C:\Users\Ian\Maryun\maryun-infra` |
+
+`github-infra` **no es un dominio**: es un alias de SSH definido en
+`~/.ssh/config` del usuario `ialrringo`, que apunta a `github.com` con la clave
+`~/.ssh/infra-deploy-key`.
+
+### Lo que hay que entender antes de tocarlo
+
+**Es una copia, no la configuración viva.** Lo que corre es
+`/srv/stacks/<servicio>/docker-compose.yml`; lo versionado es
+`/srv/infra/stacks/<servicio>/docker-compose.yml`. Son dos archivos distintos y
+**se sincronizan a mano**.
+
+Consecuencia práctica: si editas un stack y no copias el cambio al repositorio,
+el repositorio miente. Y si editas el repositorio creyendo que cambias el
+servidor, no cambias nada. La costumbre es: **cambiar en `/srv/stacks`, probar
+que funciona, y sólo entonces copiar y comitear.**
+
+### Estructura
+
+```
+/srv/infra/
+├── README.md              apunta a SERVIDOR.md
+├── SERVIDOR.md            este documento
+├── docs/                  documentación temática
+├── bin/                   copia de los scripts de /srv/bin
+├── stacks/                copia de los compose de /srv/stacks
+├── proxy/                 copia de la configuración de Traefik
+├── systemd/               las unidades .service y .timer
+├── backup/                lo relativo a respaldos
+├── migracion/             material de la migración desde el VPS
+└── .github/workflows/     la vigilancia externa
+```
+
+### Cómo trabajar con él
+
+```bash
+cd /srv/infra
+sudo cp /srv/stacks/miapp/docker-compose.yml stacks/miapp/
+sudo chown -R ialrringo:maryun .        # ver la trampa de abajo
+git add -A
+git commit -m "..."
+git push origin main
+```
+
+**La trampa, y muerde siempre la primera vez:** el `git push` hay que hacerlo
+**como `ialrringo`, sin `sudo`**. El alias `github-infra` y su clave viven en la
+configuración SSH de ese usuario; con `sudo` se usa la de `root`, que no la
+tiene, y el push falla con *«Please make sure you have the correct access
+rights»*.
+
+Y peor: si usaste `sudo` para editar o copiar, los archivos —incluidos los de
+`.git/`— quedan de `root`, y las operaciones siguientes fallan de formas raras.
+Por eso el `chown` antes de comitear. Ya pasó: una vez quedaron 79 archivos de
+`.git` con el propietario equivocado.
+
+### Qué entra y qué no
+
+**Entra:** compose, Dockerfile, configuración, scripts de operación, unidades de
+systemd, documentación, workflows.
+
+**No entra jamás:** nada de `/srv/secrets`. El `.gitignore` es deliberadamente
+agresivo —`*.env`, `*secret*`, `*password*`, `*.key`, `*.pem`, `*deploy-key*`,
+volcados, respaldos— bajo el criterio de que **es preferible que se escape un
+archivo inocente a que se suba uno con credenciales**. Si algo tuyo no aparece en
+`git status`, mira el `.gitignore` antes de forzarlo con `git add -f`.
+
+Los `.env` sí pueden tener plantilla: `*.env.ejemplo` y `*.env.plantilla` están
+exceptuados, y sirven para documentar **qué claves** hace falta definir sin
+decir con qué valores.
+
+### Los documentos
 
 | documento | de qué trata |
 |---|---|
