@@ -67,10 +67,25 @@ def sanitize(nombre):
     return s[:120] or "archivo"
 
 
+ESPACIO = "adjuntos"
+
+
 def build_key(scope, oid, filename, cuando):
-    """Copia fiel de buildKey(), con el prefijo de espacio "adjuntos"."""
+    """Copia fiel de buildKey() en lib/storage/driver.ts.
+
+    OJO con el prefijo del espacio: buildKey NO lo incluye. Lo pone conPrefijo()
+    dentro de getStorage(), asi que el objeto en el bucket vive en
+    "adjuntos/<scope>/..." pero InvoiceAttachment.storageKey guarda solo
+    "<scope>/...". Guardarlo con el prefijo hace que la aplicacion busque
+    "adjuntos/adjuntos/<scope>/..." al abrir el archivo, y el visor falla.
+    """
     yyyymm = "%d/%02d" % (cuando.year, cuando.month)
-    return "adjuntos/%s/%s/%s/%s" % (scope, yyyymm, oid, sanitize(filename))
+    return "%s/%s/%s/%s" % (scope, yyyymm, oid, sanitize(filename))
+
+
+def ruta_en_bucket(clave):
+    """Donde vive de verdad el objeto: la clave con el prefijo del espacio."""
+    return "%s/%s" % (ESPACIO, clave)
 
 
 # ─────────────────────────────────────────────────────────────── limpieza ──
@@ -97,7 +112,7 @@ if LIMPIAR:
     """ % (PREFIJO_NOMINA, PREFIJO_NOMINA))
     print("filas borradas. Los objetos de R2 hay que borrarlos aparte:")
     for c in claves:
-        print("   rclone delete origen:maryun-erp/%s" % c)
+        print("   rclone delete origen:maryun-erp/%s/%s" % (ESPACIO, c))
     sys.exit(0)
 
 
@@ -165,7 +180,7 @@ if not HAZLO:
     for t in tareas:
         chk = hashlib.sha256(t["cuerpo"]).hexdigest()
         oid = t["oid"] or "<id de la nomina>"
-        print("   %s" % build_key(t["scope"], oid, "%s-%s" % (chk[:8], t["filename"]), ahora))
+        print("   %s" % ruta_en_bucket(build_key(t["scope"], oid, "%s-%s" % (chk[:8], t["filename"]), ahora)))
     print("")
     print("(informativo; agrega --hazlo para ejecutar)")
     sys.exit(0)
@@ -203,6 +218,7 @@ print("== subiendo a R2 (bucket %s)" % env["R2_ORIGEN_BUCKET"])
 for t in tareas:
     chk = hashlib.sha256(t["cuerpo"]).hexdigest()
     clave = build_key(t["scope"], t["oid"], "%s-%s" % (chk[:8], t["filename"]), ahora)
+    destino = ruta_en_bucket(clave)
     local = os.path.join(TRABAJO, os.path.basename(clave))
     with open(local, "wb") as f:
         f.write(t["cuerpo"])
@@ -216,11 +232,11 @@ for t in tareas:
         "-e", "RCLONE_CONFIG_O_SECRET_ACCESS_KEY=" + env["R2_ORIGEN_SECRET"],
         "rclone/rclone:latest", "copyto",
         "/datos/" + os.path.basename(clave),
-        "o:%s/%s" % (env["R2_ORIGEN_BUCKET"], clave),
+        "o:%s/%s" % (env["R2_ORIGEN_BUCKET"], destino),
         "--s3-no-check-bucket",
     ], capture_output=True, text=True)
     if r.returncode != 0:
-        print("   FALLO %s: %s" % (clave, (r.stderr or r.stdout)[-300:]))
+        print("   FALLO %s: %s" % (destino, (r.stderr or r.stdout)[-300:]))
         continue
 
     psql("""
@@ -232,7 +248,7 @@ for t in tareas:
         ON CONFLICT ("storageKey") DO NOTHING;
     """ % (t["owner"], str(uuid.uuid4()), t["oid"], t["rut"], t["tipo"], t["folio"],
            t["filename"].replace("'", "''"), t["ct"], len(t["cuerpo"]), clave, chk))
-    print("   ok  %-9s %6d B  %s" % (t["scope"], len(t["cuerpo"]), clave))
+    print("   ok  %-9s %6d B  %s" % (t["scope"], len(t["cuerpo"]), destino))
 
 print("")
 print("== filas de InvoiceAttachment creadas")

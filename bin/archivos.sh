@@ -82,13 +82,19 @@ log "=== copiando $R2_ORIGEN_BUCKET -> $R2_RESPALDO_BUCKET ==="
 #
 # --checksum compara por suma en vez de por fecha: R2 no siempre conserva la
 # fecha de modificacion al copiar entre buckets.
-# El destino lleva un prefijo propio, adjuntos/, y NO la raiz del bucket.
+# El destino lleva un prefijo propio, erp/, y NO la raiz del bucket.
 #
-# Por que: desde el 4-sep-2026 el PITR de la base guarda en este mismo
-# bucket bajo pitr/. Contando el bucket entero, esos objetos inflaban la
+# Por que un prefijo: desde el 4-sep-2026 el PITR de la base guarda en este
+# mismo bucket bajo pitr/. Contando el bucket entero, esos objetos inflaban la
 # cuenta y el guardarrail de mas abajo comparaba adjuntos contra
 # adjuntos-mas-PITR: podia faltar la mitad de los adjuntos y seguir dando OK.
-DESTINO="respaldo:$R2_RESPALDO_BUCKET/adjuntos"
+#
+# Por que "erp" y no "adjuntos": el bucket de origen no guarda solo adjuntos.
+# El ERP separa por ESPACIO -"adjuntos" de facturas y nominas, "productos" del
+# catalogo- y cada espacio es un prefijo dentro del bucket. Copiando el bucket
+# entero bajo un prefijo llamado adjuntos/ quedaba adjuntos/adjuntos/facturas/,
+# que ademas de feo era mentira en cuanto apareciera otro espacio.
+DESTINO="respaldo:$R2_RESPALDO_BUCKET/erp"
 
 salida="$(rc copy "origen:$R2_ORIGEN_BUCKET" "$DESTINO" \
           --checksum --transfers 8 --stats-one-line --stats 1m)"
@@ -104,7 +110,7 @@ contar() {
 }
 ORIGEN_N="$(contar "origen:$R2_ORIGEN_BUCKET")"
 RESPALDO_N="$(contar "$DESTINO")"
-log "  origen: ${ORIGEN_N:-?} objetos · respaldo/adjuntos: ${RESPALDO_N:-?}"
+log "  origen: ${ORIGEN_N:-?} objetos · respaldo/erp: ${RESPALDO_N:-?}"
 
 if [ -n "$ORIGEN_N" ] && [ -n "$RESPALDO_N" ] && [ "$RESPALDO_N" -lt "$ORIGEN_N" ]; then
     morir "el respaldo tiene MENOS objetos que el origen: la copia quedo incompleta"

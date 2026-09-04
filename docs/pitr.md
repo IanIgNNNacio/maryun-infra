@@ -49,13 +49,25 @@ El bucket `maryun-erp-respaldo` lo comparten dos cosas, cada una en su prefijo:
 | prefijo | qué | quién lo escribe |
 |---|---|---|
 | `pitr/` | la base: WAL + copias base, **cifrado** | `maryun-pitr-externo`, cada 15 min |
-| `adjuntos/` | los adjuntos del ERP, en claro | `maryun-archivos`, cada hora |
+| `erp/` | el almacenamiento de objetos del ERP, en claro | `maryun-archivos`, cada hora |
 
 **Los prefijos separados no son cosmética.** `archivos.sh` verifica que el
 destino no tenga menos objetos que el origen; cuando contaba el bucket entero,
 los objetos del PITR inflaban la cuenta y ese guardarraíl dejaba de servir —
 podía faltar la mitad de los adjuntos y seguir dando OK. Corregido el
 4-sep-2026, el mismo día que el PITR empezó a compartir el bucket.
+
+Y el prefijo se llama `erp/`, no `adjuntos/`: el bucket de origen no guarda sólo
+adjuntos. El ERP separa por **espacio** —`adjuntos` de facturas y nóminas,
+`productos` del catálogo— y cada espacio es un prefijo dentro del bucket. Con un
+prefijo llamado `adjuntos/` quedaba `adjuntos/adjuntos/facturas/…`, que además
+de feo dejaba de ser verdad en cuanto apareciera otro espacio.
+
+**Qué NO está en R2.** Sólo estas dos cosas. El respaldo diario de todo lo demás
+—los volcados de los seis Postgres, ClickHouse, los pipelines de Mage, la
+configuración de Coolify y `/srv/secrets` cifrado— va al **Backup Storage de
+OVH**, no aquí: son unos 2 GB por generación, con 3 generaciones y retención de
+30 días. Se consulta con `sudo /srv/bin/ver-generaciones.sh`.
 
 **El repositorio local es el único que toca `archive_command`, y es
 deliberado.** Si el archivado dependiera de la red, un corte de red haría que
@@ -97,6 +109,21 @@ del `Dockerfile` y el `image:` del `docker-compose.yml`.
 **Por qué el espejo no lleva PITR:** genera 6.829 MB de WAL al día, once veces
 más que el ERP, porque se reescribe entero cada noche. Sería gastar espacio
 protegiendo algo que ya es reproducible.
+
+### Preview
+
+`maryun_erp_preview` vive en el mismo cluster que producción, así que el PITR y
+el volcado diario la cubren igual. Lo que **ya no existe** es lo que había en el
+VPS viejo: `scripts/replica/sync.sh` traía producción desde Neon cada hora y de
+paso podía refrescar preview, para que las pruebas se hicieran con datos reales.
+Ese script dependía de Neon y de Vercel, que ya no están, y **no está instalado
+en este servidor** — no hay cron ni temporizador que lo llame. Preview quedó
+congelada en la instantánea con la que se creó (210 MB frente a los 289 MB de
+producción).
+
+Tampoco se respalda su bucket: `maryun-archivos` copia sólo `maryun-erp`, no
+`maryun-erp-preview`. Es defendible —preview es desechable por definición— pero
+conviene que sea una decisión y no un olvido.
 
 ---
 
@@ -270,6 +297,15 @@ umbrales 2, 3 y 4. Si llega un aviso de éstos, es urgente.
 
 **El uid 999.** `install -d -o 999` falla en el anfitrión porque ese uid no
 tiene nombre. Hay que usar `mkdir` + `chown 999:999`.
+
+**`storageKey` va SIN el prefijo del espacio.** Al insertar filas de
+`InvoiceAttachment` a mano es el error fácil de cometer. `buildKey()` devuelve
+`<scope>/<año>/<mes>/<id>/<archivo>`; el prefijo `adjuntos/` lo añade
+`conPrefijo()` dentro de `getStorage()`, al escribir **y al leer**. Así que el
+objeto vive en `adjuntos/facturas/…` pero la columna guarda `facturas/…`.
+Guardarla con el prefijo hace que el visor busque `adjuntos/adjuntos/facturas/…`
+y muestre el icono de archivo bloqueado, sin más pista. Pasó el 4-sep-2026 con
+los adjuntos de prueba.
 
 **Un respaldo que no se ha probado a restaurar no es un respaldo.** Por eso el
 ensayo es mensual y automático, no una nota en la documentación.
