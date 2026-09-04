@@ -1,5 +1,10 @@
 # maryun-infra
 
+> **Si llegas nuevo a este servidor, empieza por [SERVIDOR.md](SERVIDOR.md).**
+> Es el documento único: hardware, particiones, redes, puertos, qué es público
+> y qué no, dónde va cada cosa, cómo conectarse a cada servicio, las reglas
+> sobre secretos y exposición, y la receta para montar una aplicación nueva.
+
 Infraestructura del servidor **maryun01** (OVH, `148.113.168.13`).
 
 Este repositorio describe **cómo se levanta el servidor**, no con qué llaves.
