@@ -21,12 +21,56 @@
 # red 'coolify' con el proxy: a esos hay que llegarles por nombre de contenedor,
 # porque el rodeo host -> contenedor no completa la vuelta y la peticion se cuelga.
 
+# ATENCION: metabase.maryun.cl, reportes.maryun.cl, superset.maryun.cl y
+# reporteria.maryun.cl son PUBLICOS desde el 2026-09-02-1548, a pedido del jefe de Ian.
+# El resto sigue tras la VPN. Los publicos llevan limitador de peticiones,
+# no lista de IP.
 http:
   middlewares:
     solo-vpn:
       ipAllowList:
         sourceRange:
           - 10.8.0.0/24
+    # Freno de fuerza bruta para lo que esta expuesto a internet.
+    #
+    # 20 peticiones por segundo de media y hasta 50 de golpe, por IP de
+    # cliente. Un tablero legitimo no se acerca ni de lejos; un ataque de
+    # diccionario contra el login se estrella contra esto.
+    #
+    # depth: 1 es lo importante. Sin el, Traefik agrupa por la IP de la
+    # conexion -que siempre es Cloudflare, porque el cortafuegos solo admite a
+    # Cloudflare en 80/443- y entonces el limite lo agota el trafico normal de
+    # todos los usuarios juntos. Con depth 1 se toma la primera IP de
+    # X-Forwarded-For, que es la del cliente real segun Cloudflare.
+    freno:
+      rateLimit:
+        average: 20
+        burst: 50
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+    # freno-borde: el limite que se aplica en el ENTRYPOINT, no por router.
+    #
+    # Cubre las aplicaciones que gestiona Coolify -el ERP y las dos tiendas-,
+    # que generan sus etiquetas solas y no referencian ningun middleware. Y
+    # cubre de oficio cualquier aplicacion futura, que es el punto: cerrar el
+    # hueco por omision en vez de recordar parchear cada una.
+    #
+    # SIN `depth`, a diferencia de `freno`. En el entrypoint entran tambien los
+    # routers de solo-VPN, donde las peticiones llegan de 10.8.0.x sin
+    # X-Forwarded-For: con depth 1 Traefik no podria extraer un origen y todos
+    # los usuarios de la VPN compartirian un unico cubo. La IP real la resuelve
+    # ahora `forwardedHeaders.trustedIPs` del compose, que hace innecesario el
+    # truco de la profundidad.
+    #
+    # El limite es mas alto que el de `freno` a proposito: esto es una red de
+    # seguridad contra inundacion, no la politica fina de cada ruta. Los
+    # routers publicos que ya llevan `freno` mantienen su limite de 20, que es
+    # el mas estricto de los dos y por tanto el que manda.
+    freno-borde:
+      rateLimit:
+        average: 100
+        burst: 200
     a-https:
       redirectScheme:
         scheme: https
@@ -34,21 +78,30 @@ http:
 
   routers:
     # ── HTTP: solo redirige a HTTPS ──────────────────────────────────────────
-    vpn-http:
+    # Redireccion http -> https de los hosts PUBLICOS.
+    # Sin solo-vpn a proposito: con el, quien escriba la direccion sin
+    # la "s" recibiria un 403 en vez de ir a https.
+    publico-http:
       rule: >-
         Host(`metabase.maryun.cl`) || Host(`reportes.maryun.cl`) ||
-        Host(`superset.maryun.cl`) || Host(`mage.maryun.cl`) ||
-        Host(`coolify.maryun.cl`) || Host(`monitoreo.maryun.cl`) ||
-        Host(`metricas.maryun.cl`)
+        Host(`superset.maryun.cl`)
+      entryPoints: [http]
+      middlewares: [a-https]
+      service: metabase-vpn        # irrelevante: siempre redirige
+
+    # Redireccion de los hosts PRIVADOS: primero hay que estar en la VPN.
+    vpn-http:
+      rule: >-
+        Host(`mage.maryun.cl`) || Host(`coolify.maryun.cl`) ||
+        Host(`monitoreo.maryun.cl`) || Host(`metricas.maryun.cl`)
       entryPoints: [http]
       middlewares: [solo-vpn, a-https]
       service: metabase-vpn        # irrelevante: siempre redirige
-
     # ── HTTPS: lo real ───────────────────────────────────────────────────────
     metabase-vpn:
       rule: "Host(`metabase.maryun.cl`) || Host(`reportes.maryun.cl`)"
       entryPoints: [https]
-      middlewares: [solo-vpn]
+      middlewares: [freno]
       service: metabase-vpn
       tls:
         certResolver: cfdns
@@ -59,7 +112,7 @@ http:
     superset-vpn:
       rule: "Host(`superset.maryun.cl`)"
       entryPoints: [https]
-      middlewares: [solo-vpn]
+      middlewares: [freno]
       service: superset-vpn
       tls:
         certResolver: cfdns
@@ -74,8 +127,64 @@ http:
         certResolver: cfdns
         domains: [{ main: mage.maryun.cl }]
 
+    # despliegue.maryun.cl: el nombre PUBLICO del webhook de GitHub.
+    #
+    # Existe porque coolify.maryun.cl resuelve a 10.8.0.1 -la VPN- y GitHub no
+    # puede alcanzar una direccion privada: la entrega fallaba antes de hacer
+    # la peticion, y ese era el motivo real de que los despliegues no se
+    # dispararan.
+    #
+    # Se usa un nombre aparte y no se abre coolify.maryun.cl a proposito: con
+    # el proxy de Cloudflare delante, Traefik veria la IP de Cloudflare y la
+    # lista de IP de la interfaz bloquearia a todos, VPN incluida.
+    #
+    # Solo acepta /webhooks/. Cualquier otra ruta en este nombre no coincide
+    # con ningun router y devuelve 404: la interfaz no se expone por aqui.
+    #
+    # Su autenticacion es la firma HMAC que Coolify verifica, no la red.
+    despliegue-webhook:
+      rule: "Host(`despliegue.maryun.cl`) && PathPrefix(`/webhooks/`)"
+      entryPoints: [https]
+      # Con freno: la firma protege de que alguien despliegue, pero no de que
+      # inunde el endpoint. GitHub manda 2 peticiones por push, muy por debajo
+      # del limite, asi que no hay riesgo de perder un despliegue.
+      middlewares: [freno]
+      service: coolify-vpn
+      tls:
+        certResolver: cfdns
+        domains: [{ main: despliegue.maryun.cl }]
+
+    # El webhook de GitHub, y SOLO el, sin restriccion de red.
+    #
+    # Su autenticacion es la firma HMAC del secreto que Coolify verifica en
+    # cada peticion, no la IP de origen. Una lista de IP no serviria: el
+    # cortafuegos solo admite a Cloudflare en 80/443, asi que Traefik ve la IP
+    # de Cloudflare y nunca la de GitHub.
+    #
+    # priority mas alta que coolify-vpn para que gane. Si no, la peticion cae
+    # en el router con solo-vpn y GitHub recibe 403, que es exactamente lo que
+    # pasaba y lo que dejo de desplegar el preview.
+    coolify-webhook:
+      rule: "Host(`coolify.maryun.cl`) && PathPrefix(`/webhooks/`)"
+      priority: 100
+      entryPoints: [https]
+      # Sin middleware no tenia limite de tasa. Se le pone `freno`, el mismo
+      # que ya lleva despliegue-webhook.
+      #
+      # NOTA: este router probablemente sobra. coolify.maryun.cl resuelve a
+      # 10.8.0.1 -la VPN-, asi que GitHub no puede alcanzarlo: es justo el
+      # motivo por el que existe despliegue.maryun.cl. Queda con freno en vez
+      # de borrarse porque eliminarlo es decision de quien sepa si algo dentro
+      # de la VPN lo usa.
+      middlewares: [freno]
+      service: coolify-vpn
+      tls:
+        certResolver: cfdns
+        domains: [{ main: coolify.maryun.cl }]
+
     coolify-vpn:
       rule: "Host(`coolify.maryun.cl`)"
+      priority: 10
       entryPoints: [https]
       middlewares: [solo-vpn]
       service: coolify-vpn
