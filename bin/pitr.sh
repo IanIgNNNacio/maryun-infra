@@ -45,7 +45,7 @@ REPO=/srv/pitr
 LOG=/var/log/maryun-pitr.log
 CONFIG_R2=/srv/secrets/r2-respaldo.env
 CONFIG_OVH=/srv/secrets/ovh-backup.env
-RETENCION_EXTERNA_DIAS=45
+RETENCION_EXTERNA_DIAS=30
 
 log() { printf '[%s] %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
 

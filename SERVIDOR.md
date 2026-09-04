@@ -628,7 +628,7 @@ sudo /srv/bin/pitr.sh ensayo    # restaurar de verdad, sin tocar producción
 ```
 
 Ocupa 132 MB tras la primera copia completa, y se estabiliza en el orden de 5 a
-10 GB con la retención puesta (4 completos, 14 diferenciales, 45 días en R2).
+10 GB con la retención puesta: **30 días**, tanto en el servidor como en R2.
 
 **El runbook de recuperación, las trampas y la verificación están en
 [`docs/pitr.md`](docs/pitr.md).** ClickHouse no tiene equivalente: su ventana

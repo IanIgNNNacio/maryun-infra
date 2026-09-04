@@ -109,8 +109,8 @@ protegiendo algo que ya es reproducible.
 | Tiempo de una copia completa | **2,5 segundos** |
 | WAL generado | ~612 MB/día antes de comprimir |
 | Repositorio local tras el primer completo | 132 MB |
-| Retención local | 4 completos + 14 diferenciales |
-| Retención en R2 | 45 días |
+| Retención local | **30 días** (por tiempo, no por número de copias) |
+| Retención en R2 | **30 días** |
 | Espacio libre en `/srv` | 453 GB |
 
 Con esta retención el repositorio se estabiliza en el orden de **5 a 10 GB**.
@@ -308,6 +308,19 @@ El corte cae exactamente donde se pidió. La tabla de prueba se borró después.
   mismo día que se montó el PITR: con la base en una ventana de un minuto, los
   adjuntos pasaban a ser el eslabón lento de la cadena. Cada corrida es
   incremental y tarda 1-2 segundos.
+
+  **Verificado el 4-sep-2026** con `/srv/bin/probar-adjuntos.py`: se subieron 4
+  adjuntos (2 a facturas de compra, 2 a nóminas de prueba en BORRADOR), el
+  respaldo los recogió los 4 bajo `adjuntos/`, y al bajarlos del bucket de
+  respaldo el sha256 de cada uno coincidía con el `checksum` guardado en
+  `InvoiceAttachment`. El PDF seguía siendo un PDF y el PNG un PNG.
+
+  Lo que ese script **no** prueba: la ruta HTTP `/api/adjuntos` ni sus permisos.
+  Esas rutas exigen sesión de NextAuth y no hay token de API; simularlas
+  obligaría a forjar una sesión. El script replica la lógica de
+  `addAttachment()` —`sanitize`, `buildKey`, sha256— y sube con rclone, que
+  firma SigV4 igual que el driver. Para borrar lo que creó:
+  `sudo /srv/bin/probar-adjuntos.py --limpiar --hazlo`.
 - **El respaldo diario sigue existiendo** y debe seguir existiendo: el PITR
   protege de la corrupción y del error humano dentro de la ventana de retención,
   pero un volcado lógico es lo que salva de un fallo de formato del propio motor
