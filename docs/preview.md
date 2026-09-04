@@ -78,10 +78,9 @@ All migrations have been successfully applied.
 [arrancar] base al día, iniciando la aplicación
 ```
 
-Al revés también pasa: si producción va por delante, preview corre código viejo
-sobre un esquema nuevo. Con migraciones aditivas eso funciona; con una que
-renombre o borre una columna, no. Si preview se rompe justo después de un
-refresco, mirar ahí primero.
+Al revés no pasa: **preview siempre va por delante de producción**, nunca al
+contrario. Es la dirección natural del flujo —se prueba en preview y luego se
+promueve— y por eso el reinicio basta: sólo hay que aplicar hacia adelante.
 
 ### El contenedor se busca por su `DATABASE_URL`
 
