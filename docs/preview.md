@@ -159,7 +159,10 @@ producción.
 | Base `maryun_erp_preview` | **no se respalda**, y es correcto: está en su propia instancia sin archivado y el refresco la reconstruye en 8 segundos |
 | Bucket `maryun-erp-preview` | **no se respalda**, por lo mismo |
 
-Sí entra en el volcado diario de `respaldo.sh`, que recorre todos los Postgres
-del servidor — no hace falta excluirla, son 34 MB comprimidos.
+**Corrección del 5-sep-2026:** aquí decía que la base de preview entra en el
+volcado diario. **No entra.** `respaldo.sh` recorre una lista fija de
+contenedores —`maryun-erp-db`, `coolify-db`, `mage-db`, `metabase-db`,
+`superset-db`— y la instancia nueva no está en ella. Es lo correcto para algo
+que se reconstruye en ocho segundos, pero convenía no dejarlo dicho al revés.
 
 Ver [`pitr.md`](pitr.md) para el detalle de los respaldos de la base.

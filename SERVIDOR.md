@@ -927,6 +927,7 @@ decir con qué valores.
 | `docs/estructura-srv.md` | detalle de la estructura |
 | `docs/monitoreo.md` | la vigilancia interna |
 | `docs/monitoreo-externo.md` | la vigilancia desde fuera, y sus tres trampas |
+| **`docs/EMERGENCIA.md`** | **qué hacer cuando algo se cae: aplicación, datos, servidor entero** |
 | `docs/postgres-espejo.md` | el Postgres espejo, y qué gana frente a ClickHouse |
 | `docs/postgres-vs-clickhouse-en-bi.md` | qué puede hacer cada motor en Metabase y Superset |
 | `docs/ventas-no-calzan.md` | por qué las ventas del DWH no cuadraban, y cómo se arregló |
