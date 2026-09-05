@@ -1,7 +1,10 @@
 # maryun01 — el servidor
 
-Documento único de referencia. Estado verificado contra la máquina el **3 de
+Documento único de referencia. Estado verificado contra la máquina el **5 de
 septiembre de 2026**.
+
+> **Si es tu primera vez aquí y algo se está cayendo**, no leas esto: ve directo
+> a [`docs/EMERGENCIA.md`](docs/EMERGENCIA.md).
 
 Si vas a montar algo aquí, lee al menos: **Cómo conectarse**, **Secretos**,
 **Dónde va cada cosa** y **Receta: montar una aplicación nueva**. Lo demás es
@@ -198,8 +201,22 @@ aparte que Coolify no pisa:
 | nombre | qué hace |
 |---|---|
 | `solo-vpn` | `ipAllowList` sobre `10.8.0.0/24` |
-| `freno` | límite de 20 peticiones/s, ráfaga 50, por IP real (`depth: 1`) |
+| `freno` | 20 peticiones/s, ráfaga 50, por IP real (`depth: 1`). Se aplica por router |
+| `freno-borde` | 100 peticiones/s, ráfaga 200, por IP de origen. **Se aplica en el entrypoint**, así que cubre TODO |
 | `a-https` | redirige HTTP a HTTPS |
+
+**`freno-borde` va en el entrypoint y no por router, y esa es la gracia.** Las
+aplicaciones que gestiona Coolify generan sus propias etiquetas de Traefik y no
+incluyen ningún límite: el ERP y la tienda estuvieron sin freno desde siempre.
+Ponerlo en `--entrypoints.https.http.middlewares` lo aplica a las cuatro y a
+cualquier aplicación futura, sin tocar una sola etiqueta de Coolify.
+
+Probado con 600 peticiones a 1368/s: 242 pasaron y **358 se rechazaron con 429**.
+
+El proxy lleva además `forwardedHeaders.trustedIPs` con los rangos de Cloudflare,
+así que en los registros aparece la IP real del visitante y no la del borde.
+**Sólo están los rangos IPv4**: falta añadir los IPv6, que `firewall-sync.sh` ya
+mantiene.
 
 ### Quién es público y quién no
 
@@ -282,7 +299,8 @@ UIDs conocidos, por si hay que ajustar permisos de un bind mount: ClickHouse
 | `dwh-postgres` | `dwh-postgres` | Postgres espejo para tableros |
 | `mysis-tunnel` | `mysis_tunnel` | túnel SSH a MySis, el ERP viejo |
 | `monitoreo` | `uptime-kuma`, `beszel`, `monitoreo-socket-proxy` | vigilancia |
-| `maryun-erp` | `maryun-erp-db` | Postgres del ERP nuevo |
+| `maryun-erp` | `maryun-erp-db` | Postgres del ERP nuevo (producción) |
+| `maryun-erp-preview-db` | `maryun-erp-preview-db` | Postgres **sólo de preview**, instancia aparte y sin archivado de WAL |
 | (Coolify) | `coolify`, `-db`, `-redis`, `-proxy`, `-realtime`, `-sentinel` | plataforma de despliegue |
 | (Coolify) | dos contenedores con nombre de UUID | el ERP: producción y preview |
 
@@ -329,6 +347,15 @@ usan Metabase y Superset, `mage` el de los ETL, `mcp` el de las herramientas, y
 `admin` sólo para administrar. Lo mismo en el Postgres espejo: `bi_lector` sólo
 lee el esquema `mysis` y sólo puede crear tablas en `manual`. **Respeta esa
 separación**: si montas algo que sólo consulta, dale el usuario de lectura.
+
+En el Postgres del ERP hay lo mismo: **`dwh_lector` sólo puede leer**. Lo
+verifiqué el 5-sep-2026: `SELECT` sí, `INSERT`/`DELETE` no, y las tablas nuevas
+también le quedan legibles porque lleva `ALTER DEFAULT PRIVILEGES`. **Para
+explorar producción con DBeaver usa ése**, no `maryun`, que es superusuario y un
+`DELETE` sin `WHERE` no perdona.
+
+Para conectar DBeaver, con la VPN levantada: host `10.8.0.1`, puerto **5433**
+para producción y **5435** para preview.
 
 Formas rápidas desde el servidor, sin exponer contraseñas:
 
@@ -407,13 +434,27 @@ comprometido pudo leerlos. Por eso el directorio es `0750` y de `root`.
 ### Qué hay (sólo los nombres)
 
 `clickhouse.env`, `metabase.env`, `superset.env`, `mage.env`,
-`maryun-erp-db.env`, `dwh-postgres.env`, `dwh-lector.env`, `monitoreo.env`,
-`cloudflare-dns.env`, `ovh-backup.env`, `r2-respaldo.env`, `coolify-api.env`,
-`mcp-mage.env`, las claves de despliegue (`*-deploy-key`), `mysis-ssh`,
-`respaldo-age.key` / `.pub`, `boveda.yaml.age` y **`RECUPERACION.txt`**.
+`maryun-erp-db.env`, `maryun-erp-preview-db.env`, `dwh-postgres.env`,
+`dwh-lector.env`, `monitoreo.env`, `cloudflare-dns.env`, `ovh-backup.env`,
+`r2-respaldo.env`, `preview-r2.env`, `coolify-api.env`, `mcp-mage.env`, las
+claves de despliegue (`*-deploy-key`), `mysis-ssh`, `respaldo-age.key` / `.pub`,
+`boveda.yaml.age` y **`RECUPERACION.txt`**.
 
 `RECUPERACION.txt` es el documento con lo necesario para recuperar los respaldos
 cifrados. Si se pierde, los respaldos externos son ilegibles.
+
+> ### Nunca le pidas a un asistente que lea `RECUPERACION.txt`
+>
+> Ni siquiera «filtrando la salida». Ha pasado **dos veces**: el 2-sep-2026 y el
+> 4-sep-2026, las dos por intentar listar su estructura con un filtro que dejó
+> pasar la clave privada de `age`. Las dos veces hubo que rotar.
+>
+> Para saber que existe basta `ls -l`. Para leerlo, hazlo tú.
+>
+> Las claves que se filtraron viven en `/srv/secrets/comprometidas/`. **No
+> sirven para proteger nada**: están ahí porque hacen falta para abrir respaldos
+> hechos antes de cada rotación. Se pueden borrar cuando pase la retención de 30
+> días de esos respaldos.
 
 ### Cómo se usan en la práctica
 
@@ -805,6 +846,31 @@ a un dominio con proxy puede recibir un 403 con «error 1010». `curl` pasa;
 `urllib` de Python no. Si automatizas contra un servicio propio, ve por la VPN o
 por la IP interna, no por el nombre público.
 
+**El ERP tiene DOS cadenas de conexión, y es fácil cambiar sólo una.**
+`schema.prisma` declara `url` (`DATABASE_URL`, para la aplicación) y `directUrl`
+(`DIRECT_URL`, para las migraciones) — herencia de Neon, donde la conexión
+agrupada y la directa eran hosts distintos. Al mover preview a su instancia se
+cambió sólo `DATABASE_URL`: la aplicación leía de la nueva pero
+`prisma migrate deploy` seguía yendo a producción, y **cada reinicio recreaba
+allí una base vacía**. Se borraba y reaparecía sola. Si mueves una base, cambia
+**las dos**.
+
+**`main` despliega PREVIEW, no producción.** Está escrito en §8 y aun así costó
+una hora: se empujó un arreglo a `main`, se comprobó la cabecera de
+`erp.maryun.cl` y seguía vieja. Antes de decir «ya está desplegado», mira en qué
+rama está la aplicación:
+
+```bash
+sudo docker exec coolify-db psql -U coolify -d coolify -tAF' | '   -c "select name, git_branch from applications order by id"
+```
+
+**`X-Frame-Options: DENY` rompe cualquier visor propio.** El ERP servía los
+adjuntos con `DENY` y los incrustaba en un `<iframe>` suyo: el navegador se
+negaba a renderizarlos y mostraba un icono de archivo bloqueado. La petición
+devolvía **200** y el archivo llegaba entero — fallaba sólo el encuadre, que es
+lo que lo hacía difícil de ver. Lo que protege de clickjacking es impedir que un
+**tercero** enmarque, y eso `SAMEORIGIN` lo hace igual.
+
 **`docker exec` sin `-i` dentro de un heredoc no recibe nada.** Y
 `docker compose exec -T` se come el heredoc de fuera. Si le pasas SQL o un script
 por la entrada estándar, `-i` es obligatorio.
@@ -924,10 +990,12 @@ decir con qué valores.
 | documento | de qué trata |
 |---|---|
 | `/srv/README.md` | la convención de `/srv`, con permisos y UIDs |
+| **`docs/EMERGENCIA.md`** | **empieza por aquí si algo se cayó** |
+| `docs/pitr.md` | recuperación a un instante: cómo funciona, cómo restaurar, sus trampas |
+| `docs/preview.md` | el refresco diario de producción a preview, y por qué preview tiene su propia instancia |
 | `docs/estructura-srv.md` | detalle de la estructura |
 | `docs/monitoreo.md` | la vigilancia interna |
 | `docs/monitoreo-externo.md` | la vigilancia desde fuera, y sus tres trampas |
-| **`docs/EMERGENCIA.md`** | **qué hacer cuando algo se cae: aplicación, datos, servidor entero** |
 | `docs/postgres-espejo.md` | el Postgres espejo, y qué gana frente a ClickHouse |
 | `docs/postgres-vs-clickhouse-en-bi.md` | qué puede hacer cada motor en Metabase y Superset |
 | `docs/ventas-no-calzan.md` | por qué las ventas del DWH no cuadraban, y cómo se arregló |
@@ -955,6 +1023,19 @@ Para que no se descubra por sorpresa:
 - **El proceso que consulta el estado de los DTE en el SII lleva todo 2026
   caído.** Nadie sabe qué facturas fueron aceptadas o rechazadas este año.
 - **El ETL de ventas (`ventas_mysis`) no entra en el refresco nocturno**, a
-  diferencia de las otras nueve tablas espejo. Por eso acumula deriva.
+  diferencia de las otras nueve tablas espejo. Por eso acumula deriva. En curso:
+  recarga completa mes a mes con `EXCHANGE TABLES`, reutilizando
+  `dl_ventas_mysis_batch.py`. **Ojo:** una recarga recalcula el margen histórico
+  con el `pmp` de hoy — medido en agosto de 2026, mueve 148.876 sobre 220,6 M
+  (0,07 %), siempre acercándose a lo que dice MySis.
 - **Cloudflare Access** está documentado y sin activar.
 - Dos reinicios en frío sin explicación, con **ticket redactado y sin enviar**.
+  No se han repetido desde el 2-sep-2026.
+- **Faltan los rangos IPv6 de Cloudflare** en `forwardedHeaders.trustedIPs` del
+  proxy; los IPv4 sí están.
+- **`scripts/replica/` en el repositorio del ERP** son los guiones del VPS viejo
+  —`sync.sh` traía datos de Neon, `emergencia.sh` era el failover de Vercel—.
+  Están retirados enteros y propuestos para borrar; sus funciones ya las cubren
+  `/srv/bin/refrescar-preview.sh` y `docs/EMERGENCIA.md`.
+- **Los pipelines de MongoDB y justpim** en Mage están todos inactivos y
+  propuestos para borrar. Ian pidió esperar a tener todo lo demás cerrado.
