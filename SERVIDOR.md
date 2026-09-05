@@ -215,8 +215,12 @@ Probado con 600 peticiones a 1368/s: 242 pasaron y **358 se rechazaron con 429**
 
 El proxy lleva además `forwardedHeaders.trustedIPs` con los rangos de Cloudflare,
 así que en los registros aparece la IP real del visitante y no la del borde.
-**Sólo están los rangos IPv4**: falta añadir los IPv6, que `firewall-sync.sh` ya
-mantiene.
+Van los **22 rangos**: 15 de IPv4 y **7 de IPv6**, leídos de
+`/srv/stacks/traefik/cloudflare-ips-*.txt`. Comprobado en las dos familias.
+
+> **Corregido el 5-sep-2026.** Aquí decía que faltaban los IPv6. Es falso: están.
+> La comprobación que lo dijo se hizo antes de que se añadieran, y no se repitió
+> antes de escribirlo.
 
 ### Quién es público y quién no
 
@@ -227,8 +231,10 @@ mantiene.
 | `metabase.maryun.cl` | **público** | Metabase |
 | `reportes.maryun.cl` | **público** | Metabase (alias) |
 | `superset.maryun.cl` | **público** | Superset |
+| `tiendaproduccion.maryun.cl` | **público** | e-commerce, producción (Coolify) |
+| `tiendapreview.maryun.cl` | **público** | e-commerce, preview (Coolify) |
 | `despliegue.maryun.cl` | **público, sólo `/webhooks/`** | Coolify |
-| `coolify.maryun.cl` | sólo VPN | interfaz de Coolify |
+| `coolify.maryun.cl` | sólo VPN | interfaz de Coolify **y su router de webhooks** |
 | `mage.maryun.cl` | sólo VPN | Mage |
 | `monitoreo.maryun.cl` | sólo VPN | Uptime Kuma |
 | `metricas.maryun.cl` | sólo VPN | Beszel |
@@ -288,7 +294,7 @@ UIDs conocidos, por si hay que ajustar permisos de un bind mount: ClickHouse
 
 ## 6 · Qué corre hoy
 
-27 contenedores. Por stack:
+30 contenedores. Por stack:
 
 | stack | contenedores | qué es |
 |---|---|---|
@@ -438,7 +444,7 @@ comprometido pudo leerlos. Por eso el directorio es `0750` y de `root`.
 `dwh-lector.env`, `monitoreo.env`, `cloudflare-dns.env`, `ovh-backup.env`,
 `r2-respaldo.env`, `preview-r2.env`, `coolify-api.env`, `mcp-mage.env`, las
 claves de despliegue (`*-deploy-key`), `mysis-ssh`, `respaldo-age.key` / `.pub`,
-`boveda.yaml.age` y **`RECUPERACION.txt`**.
+`maryun-ecommerce.env`, `boveda.yaml.age` y **`RECUPERACION.txt`**.
 
 `RECUPERACION.txt` es el documento con lo necesario para recuperar los respaldos
 cifrados. Si se pierde, los respaldos externos son ilegibles.
@@ -591,10 +597,17 @@ internet sin que nada lo anuncie.
 
 ### El ERP
 
-| entorno | URL | rama | base |
+| aplicación | URL | rama | base |
 |---|---|---|---|
-| Producción | `erp.maryun.cl` | `production` | `maryun_erp` |
-| Preview | `preview.maryun.cl` | `main` | `maryun_erp_preview` |
+| ERP, producción | `erp.maryun.cl` | `production` | `maryun_erp` |
+| ERP, preview | `preview.maryun.cl` | `main` | `maryun_erp_preview` (instancia aparte) |
+| Tienda, producción | `tiendaproduccion.maryun.cl` | `production` | `maryun_ecommerce` |
+| Tienda, preview | `tiendapreview.maryun.cl` | `main` | `maryun_ecommerce_preview` |
+
+Las cuatro las gestiona Coolify. La tienda vive en el proyecto
+`maryun-ecommerce`; sus dos bases están en `maryun-erp-db`, cada una con su
+propio rol y `CONNECT` acotado, y entran solas al respaldo porque `respaldo.sh`
+descubre las bases con `pg_database`.
 
 Un push a `main` despliega preview solo; publicar es fusionar `main` en
 `production`. Lo dispara un **webhook de GitHub** contra
@@ -864,6 +877,22 @@ rama está la aplicación:
 sudo docker exec coolify-db psql -U coolify -d coolify -tAF' | '   -c "select name, git_branch from applications order by id"
 ```
 
+**Un `.env` sin comillas se EJECUTA al hacer `.` sobre él.** El token de la API
+de Coolify tiene forma `N|cadena`; sin entrecomillar, el shell leyó el `|` como
+una tubería e imprimió la segunda mitad del token en un mensaje de error. Hubo
+que rotarlo. Se auditaron los doce `.env` del servidor y era el único. **Si un
+valor lleva `|`, `$`, `&`, `;` o espacios, va entre comillas.**
+
+**La API de Coolify (4.3.16) tiene tres detalles que cuestan tiempo:** `deploy`
+es un permiso distinto de `write` en el token; el endpoint de despliegue es
+**POST**, no GET —con GET responde 405 y el mensaje lo dice—; y el de variables
+de entorno rechaza `is_build_time` con un 422.
+
+**El refresco de preview hace `DROP DATABASE` + `CREATE`**, así que **cualquier
+permiso concedido a nivel de esa base se pierde en el refresco siguiente**. Si
+alguna vez hace falta un `GRANT` ahí, va dentro de `refrescar-preview.sh`, no a
+mano.
+
 **`X-Frame-Options: DENY` rompe cualquier visor propio.** El ERP servía los
 adjuntos con `DENY` y los incrustaba en un `<iframe>` suyo: el navegador se
 negaba a renderizarlos y mostraba un icono de archivo bloqueado. La petición
@@ -1031,8 +1060,6 @@ Para que no se descubra por sorpresa:
 - **Cloudflare Access** está documentado y sin activar.
 - Dos reinicios en frío sin explicación, con **ticket redactado y sin enviar**.
   No se han repetido desde el 2-sep-2026.
-- **Faltan los rangos IPv6 de Cloudflare** en `forwardedHeaders.trustedIPs` del
-  proxy; los IPv4 sí están.
 - **`scripts/replica/` en el repositorio del ERP** son los guiones del VPS viejo
   —`sync.sh` traía datos de Neon, `emergencia.sh` era el failover de Vercel—.
   Están retirados enteros y propuestos para borrar; sus funciones ya las cubren
