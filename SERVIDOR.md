@@ -534,14 +534,30 @@ sudo /srv/bin/secretos.sh editar       # abre el editor con el contenido descifr
 Al guardar, se vuelve a cifrar solo. El archivo temporal vive en `/dev/shm`, que
 es memoria: **el texto en claro no toca el disco en ningún momento**.
 
-> **La bóveda de hoy está cifrada contra la llave que se filtró.** Comprobado
-> el 5-sep-2026: `boveda.yaml.age` es del 2-sep y la rotación de
-> `respaldo-age.key` fue el 4-sep, así que `secretos.sh` **no la puede abrir**
-> —falla con «no identity matched any of the recipients»— y la única llave que
-> sí la abre es la de `comprometidas/`. Dos consecuencias, y son distintas: la
-> herramienta no sirve tal como está, y **todo lo que haya dentro hay que darlo
-> por expuesto y rotarlo**. Recifrarla contra la llave vigente arregla lo
-> primero y no lo segundo.
+> **La bóveda quedó cifrada contra la llave que se filtró, y por qué importa.**
+> `boveda.yaml.age` es del 2-sep; la rotación de `respaldo-age.key` fue el 4-sep.
+> Al rotar no se comprobó qué más estaba cifrado con la llave vieja, así que la
+> bóveda se quedó sin llave que la abriera: `secretos.sh` fallaba con «no
+> identity matched any of the recipients» y la única que la descifraba era la de
+> `comprometidas/`.
+>
+> **Recifrada el 5-sep-2026** contra la llave vigente. `secretos.sh` vuelve a
+> funcionar; comprobado abriéndola.
+>
+> **Pero eso arregla la herramienta, no la exposición.** Todo lo que haya dentro
+> estuvo cifrado contra una llave cuya mitad privada acabó escrita en una
+> conversación. Por la regla de esta misma sección —si un secreto se expone, se
+> rota, sin evaluar el riesgo— **el contenido de la bóveda hay que rotarlo**.
+> Recifrar no deshace nada de eso.
+>
+> **La lección, que es lo reutilizable:** al rotar una llave de cifrado hay que
+> buscar primero todo lo que esté cifrado con ella. Aquí eran dos cosas —el
+> paquete de secretos del respaldo y esta bóveda— y sólo se pensó en la primera.
+>
+> ```bash
+> # antes de rotar respaldo-age.key, ver qué se quedaría sin llave
+> sudo find /srv /data -name '*.age' 2>/dev/null
+> ```
 
 Es el mecanismo de SOPS hecho a mano, y está así a propósito, como paso previo a
 decidir si se adopta SOPS de verdad. Lo que SOPS añadiría, por si se plantea:
