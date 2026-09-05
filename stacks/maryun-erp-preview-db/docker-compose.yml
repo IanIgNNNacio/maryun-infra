@@ -61,6 +61,21 @@ services:
       timeout: 5s
       retries: 20
 
+    # Memoria compartida para las consultas paralelas. Docker da 64 MB por
+    # omision, sin mirar la RAM de la maquina, y PostgreSQL usa /dev/shm porque
+    # dynamic_shared_memory_type viene en "posix": ahi es donde los workers
+    # paralelos se pasan las filas. Con work_mem de 16 MB y tablas de mas de un
+    # millon de filas, un hash o un orden paralelo pide mas de lo que cabe y la
+    # consulta muere con "could not resize shared memory segment ... No space
+    # left on device" -mensaje enganoso: el disco esta perfecto-.
+    #
+    # Es un TECHO, no una reserva: tmpfs solo ocupa lo que realmente se usa.
+    #
+    # Se prefiere esto a poner dynamic_shared_memory_type=sysv, que cambiaria un
+    # limite por contenedor por uno del kernel que comparten los siete Postgres
+    # de esta maquina, y cuyos segmentos quedan huerfanos si muere un backend.
+    shm_size: 1g
+
     deploy:
       resources:
         limits:

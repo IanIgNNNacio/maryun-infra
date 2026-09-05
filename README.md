@@ -5,6 +5,10 @@
 > y qué no, dónde va cada cosa, cómo conectarse a cada servicio, las reglas
 > sobre secretos y exposición, y la receta para montar una aplicación nueva.
 
+> **Si vas a correr la migración de MySis al ERP**, lee antes
+> [docs/migracion-mysis.md](docs/migracion-mysis.md): qué piezas del servidor
+> participan, qué corre dentro de la máquina y qué no, y cómo se vuelve atrás.
+
 Infraestructura del servidor **maryun01** (OVH, `148.113.168.13`).
 
 Este repositorio describe **cómo se levanta el servidor**, no con qué llaves.

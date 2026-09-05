@@ -90,6 +90,25 @@ services:
       timeout: 5s
       retries: 20
 
+    # Memoria compartida para las consultas paralelas. Docker da 64 MB por
+    # omision sin mirar la RAM de la maquina, y PostgreSQL usa /dev/shm porque
+    # dynamic_shared_memory_type viene en "posix": ahi es donde los workers
+    # paralelos se pasan las filas. Con work_mem de 32 MB, dos workers por
+    # operacion y SaleLine en 1.275.835 filas tras la migracion de MySis, un
+    # hash o un orden paralelo pide mas de lo que cabe y la consulta muere con
+    # "could not resize shared memory segment ... No space left on device".
+    # El mensaje enganna: el disco esta perfecto, lo que se llena es la RAM
+    # compartida del contenedor. Medido el 2026-09-05: le pego a dos consultas
+    # del verificador de la migracion, y el tablero de ventas tiene el mismo
+    # perfil de consulta.
+    #
+    # Es un TECHO, no una reserva: tmpfs solo ocupa lo que realmente se usa.
+    #
+    # Se prefiere esto a dynamic_shared_memory_type=sysv, que cambiaria un
+    # limite por contenedor por uno del kernel que comparten los siete Postgres
+    # de esta maquina, y cuyos segmentos quedan huerfanos si muere un backend.
+    shm_size: 1g
+
     deploy:
       resources:
         limits:
