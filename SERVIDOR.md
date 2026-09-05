@@ -444,7 +444,13 @@ comprometido pudo leerlos. Por eso el directorio es `0750` y de `root`.
 `dwh-lector.env`, `monitoreo.env`, `cloudflare-dns.env`, `ovh-backup.env`,
 `r2-respaldo.env`, `preview-r2.env`, `coolify-api.env`, `mcp-mage.env`, las
 claves de despliegue (`*-deploy-key`), `mysis-ssh`, `respaldo-age.key` / `.pub`,
-`maryun-ecommerce.env`, `boveda.yaml.age` y **`RECUPERACION.txt`**.
+`maryun-ecommerce.env`, `erp-auth.env`, `boveda.yaml.age` y
+**`RECUPERACION.txt`**.
+
+`erp-auth.env` es la copia escrita de los dos secretos del acceso local del ERP
+—`TOTP_ENCRYPTION_KEY` y `PASSWORD_PEPPER`—, que la aplicación lee desde
+Coolify. No lo consume ningún compose: existe para poder reponerlos si hay que
+recrear la aplicación. Hay plantilla en `stacks/erp-auth.env.plantilla`.
 
 `RECUPERACION.txt` es el documento con lo necesario para recuperar los respaldos
 cifrados. Si se pierde, los respaldos externos son ilegibles.
@@ -527,6 +533,15 @@ sudo /srv/bin/secretos.sh editar       # abre el editor con el contenido descifr
 
 Al guardar, se vuelve a cifrar solo. El archivo temporal vive en `/dev/shm`, que
 es memoria: **el texto en claro no toca el disco en ningún momento**.
+
+> **La bóveda de hoy está cifrada contra la llave que se filtró.** Comprobado
+> el 5-sep-2026: `boveda.yaml.age` es del 2-sep y la rotación de
+> `respaldo-age.key` fue el 4-sep, así que `secretos.sh` **no la puede abrir**
+> —falla con «no identity matched any of the recipients»— y la única llave que
+> sí la abre es la de `comprometidas/`. Dos consecuencias, y son distintas: la
+> herramienta no sirve tal como está, y **todo lo que haya dentro hay que darlo
+> por expuesto y rotarlo**. Recifrarla contra la llave vigente arregla lo
+> primero y no lo segundo.
 
 Es el mecanismo de SOPS hecho a mano, y está así a propósito, como paso previo a
 decidir si se adopta SOPS de verdad. Lo que SOPS añadiría, por si se plantea:
@@ -1072,6 +1087,15 @@ Para que no se descubra por sorpresa:
   `dl_ventas_mysis_batch.py`. **Ojo:** una recarga recalcula el margen histórico
   con el `pmp` de hoy — medido en agosto de 2026, mueve 148.876 sobre 220,6 M
   (0,07 %), siempre acercándose a lo que dice MySis.
+- **El remitente por Microsoft Graph no está configurado en producción.** Sólo
+  existe `NOTIFIER_FROM`; faltan `NOTIFIER_TENANT_ID`, `_CLIENT_ID` y
+  `_CLIENT_SECRET`, y no hay fila `notifier` en `IntegrationSetting`. En
+  `mail_log` no hay ni un envío correcto: dos intentos por Resend el 25-ago, los
+  dos fallidos. Mientras siga así, el acceso al ERP con **código al correo** no
+  se ofrece —la pantalla comprueba el canal antes de enseñar el botón— y
+  «olvidé mi contraseña» tampoco puede funcionar.
+- **La bóveda cifrada está contra la llave filtrada** (ver §7). Hay que
+  recifrarla y rotar lo que contenga.
 - **Cloudflare Access** está documentado y sin activar.
 - Dos reinicios en frío sin explicación, con **ticket redactado y sin enviar**.
   No se han repetido desde el 2-sep-2026.

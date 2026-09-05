@@ -128,6 +128,37 @@ despues="$(docker exec "$DESTINO_CONT" psql -U maryun -d postgres -tAc \
     "SELECT pg_size_pretty(pg_database_size('$DESTINO'))")"
 log "  base copiada: $despues, $filas documentos del SII"
 
+# ──────────────────────────────── el acceso local NO se copia a preview ──
+# La copia de arriba trae la base de produccion ENTERA, credenciales incluidas.
+# Sin esto, una contrasena de produccion valdria en preview — que se despliega
+# desde `main` sin revision y comparte registrable con el dominio bueno.
+#
+# Son DOS defensas y hacen falta las dos: la app de preview no tiene
+# AUTH_PASSWORD_LOGIN, y aqui se vacia lo que se haya copiado. Con una sola,
+# encender la variable un dia para probar dejaria las credenciales vivas.
+#
+# `to_regclass` tolera que las tablas no existan: preview puede ir por delante
+# o por detras de produccion en migraciones.
+docker exec "$DESTINO_CONT" psql -U maryun -d "$DESTINO" -q -c "
+DO \$\$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['UserCredential','PasswordResetToken','LoginOtp',
+                           'TotpCredential','TotpRecoveryCode','LoginThrottle',
+                           'LoginAttempt'] LOOP
+    IF to_regclass('public.' || quote_ident(t)) IS NOT NULL THEN
+      EXECUTE format('TRUNCATE TABLE %I CASCADE', t);
+    END IF;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = current_schema()
+                AND table_name = 'User'
+                AND column_name = 'reauthAt') THEN
+    UPDATE \"User\" SET \"reauthAt\" = NULL WHERE \"reauthAt\" IS NOT NULL;
+  END IF;
+END \$\$;" || morir "no se pudieron vaciar las credenciales en preview"
+log "  credenciales del acceso local vaciadas en preview"
+
 # ──────────────────────────────────────────────────────────── el bucket ──
 [ -r "$CONFIG_ORIGEN" ] || morir "falta $CONFIG_ORIGEN"
 [ -r "$CONFIG_PREVIEW" ] || morir "falta $CONFIG_PREVIEW"
