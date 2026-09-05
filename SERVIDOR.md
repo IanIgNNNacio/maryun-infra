@@ -693,6 +693,21 @@ sigue siendo el respaldo diario.
 
 ## 10 · Vigilancia y tareas programadas
 
+### La ventana en la que se puede molestar
+
+El horario laboral es **lunes a viernes de 07:00 a 18:30**, y los viernes **hasta
+las 17:00**, hora de Chile. Fuera de eso no hay nadie trabajando y se puede
+cargar el servidor o MySis sin miedo.
+
+**El servidor está en UTC y Chile en UTC−4**, así que la jornada va de las
+**11:00 a las 22:30 UTC**. Todo lo programado cae fuera a propósito: el respaldo
+a las 03:15, el diferencial del PITR a las 04:30 y el refresco de preview a las
+05:10 son las 23:15, 00:30 y 01:10 en Chile.
+
+**Si añades una tarea pesada** —sobre todo si consulta MySis, que es la
+producción del ERP viejo— ponla en esa franja. Las ligeras (la copia del PITR
+cada 15 min, los adjuntos cada hora) dan igual.
+
 | temporizador | cuándo | qué hace |
 |---|---|---|
 | `maryun-respaldo` | 03:15 UTC | respaldo diario |
