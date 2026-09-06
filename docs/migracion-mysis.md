@@ -67,8 +67,13 @@ Con ClickHouse y Postgres los dos en esta máquina, esa cadena deja de hacer
 falta:
 
 - `ch-exec.sh` lee la credencial de `/srv/secrets/clickhouse.env` y entra como
-  `admin`. La contraseña nunca aparece en la línea de comandos ni en el
-  historial.
+  `admin`. La contraseña no aparece en la línea de comandos ni en el historial,
+  y conviene saber por qué se cumple: viaja por el entorno del contenedor
+  —`docker exec -e CLICKHOUSE_PASSWORD`, que hereda el valor sin escribirlo— y
+  **no** como `--password "$CLAVE"`. Esa forma, que es la que tenía el guion
+  hasta el 5-sep-2026, sí la pone en el `argv` del proceso, donde la ve
+  cualquiera que corra `ps -ef` en el momento justo. Si alguna vez hay que
+  tocar `ch-exec.sh`, ése es el detalle que no se puede perder.
 - Postgres se alcanza por `docker exec` contra `maryun-erp-db`, o sea por el
   socket local del contenedor: ahí no hay contraseña que pasar.
 
