@@ -345,9 +345,9 @@ desde ahí, no las copies a ningún sitio.
 | motor | desde la VPN | desde la red `data` | usuarios | credenciales |
 |---|---|---|---|---|
 | ClickHouse | `10.8.0.1:8123` (HTTP), `:9000` (nativo) | `clickhouse:8123` / `:9000` | `admin`, `bi`, `mage`, `mcp`, `default` | `clickhouse.env` |
-| Postgres del ERP | `10.8.0.1:5433` | `maryun-erp-db:5432` | `maryun`, `dwh_lector` | `maryun-erp-db.env`, `dwh-lector.env` |
+| Postgres del ERP | `10.8.0.1:5433` | `maryun-erp-db:5432` | `maryun`, `dwh_lector`, `erp_lector` | `maryun-erp-db.env`, `dwh-lector.env`, `erp-lector.env` |
 | Postgres de preview | `10.8.0.1:5435` | `maryun-erp-preview-db:5432` | `maryun` | `maryun-erp-preview-db.env` |
-| **Réplica de lectura del ERP** | `10.8.0.1:5436` | `maryun-erp-replica:5432` | `dwh_lector` | `dwh-lector.env` |
+| **Réplica de lectura del ERP** | `10.8.0.1:5436` | `maryun-erp-replica:5432` | `dwh_lector`, `erp_lector` | `dwh-lector.env`, `erp-lector.env` |
 | Postgres espejo | `10.8.0.1:5434` | `dwh-postgres:5432` | `dwh`, `bi_lector` | `dwh-postgres.env` |
 | MySis (el ERP viejo) | `10.8.0.1:3307` | `mysis_tunnel:3306` | `appread` (**sólo lectura**) | en `io_config.yaml` de Mage |
 
@@ -359,7 +359,13 @@ separación**: si montas algo que sólo consulta, dale el usuario de lectura.
 
 En el Postgres del ERP hay lo mismo: **`dwh_lector` sólo puede leer**. Lo
 verifiqué el 5-sep-2026: `SELECT` sí, `INSERT`/`DELETE` no, y las tablas nuevas
-también le quedan legibles porque lleva `ALTER DEFAULT PRIVILEGES`. **Para
+también le quedan legibles porque lleva `ALTER DEFAULT PRIVILEGES`.
+
+Hay **dos** roles de lectura sobre `maryun_erp` y no es duplicación:
+`dwh_lector` alcanza sólo el esquema `dwh` (las cinco vistas del RCV) y
+`erp_lector` alcanza los tres —`public`, `mig` y `dwh`, 279 tablas—. Cada uno
+sostiene una conexión distinta de Metabase, así que se puede recortar el amplio
+sin romper los tableros del acotado. Los dos llevan `ALTER DEFAULT PRIVILEGES`. **Para
 explorar producción con DBeaver usa ése**, no `maryun`, que es superusuario y un
 `DELETE` sin `WHERE` no perdona.
 

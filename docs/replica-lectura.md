@@ -44,20 +44,50 @@ también tiene `maryun_ecommerce` y `maryun_ecommerce_preview`.
 
 | | apunta a |
 |---|---|
-| Metabase → «DWH facturas RCV» | **`maryun-erp-replica`** desde el 8-sep-2026 |
+| Metabase → «DWH facturas RCV» (id 4) | **`maryun-erp-replica`**, esquema `dwh` |
+| Metabase → «ERP maryun (réplica)» (id 6) | **`maryun-erp-replica`**, los tres esquemas |
 | Metabase → «Postgres espejo MySis» | `dwh-postgres` (viene de ClickHouse, otra cosa) |
 | Superset | ClickHouse y el espejo |
 
-Se repuntó **la misma fila** de Metabase en vez de crear otra, así que todas las
-preguntas y tableros guardados siguen funcionando sin tocarlos.
+En «DWH facturas RCV» se repuntó **la misma fila** de Metabase en vez de crear
+otra, así que todas las preguntas y tableros guardados siguen funcionando sin
+tocarlos. Su filtro de esquemas (`inclusion: dwh`) se dejó como estaba: expone
+las cinco vistas del RCV y nada más, que es lo que su nombre promete.
 
-**Metabase ya no consulta producción.** Para conectarse a mano:
+«ERP maryun (réplica)» se creó aparte el 8-sep-2026, **sin filtro de
+esquemas**: 279 tablas —249 de `public`, 25 de `mig`, 5 de `dwh`—. Son las
+tablas crudas de Prisma, en `PascalCase` y con claves foráneas por UUID; sirven
+para explorar, no para construir tableros que tengan que durar. Lo que se
+consulte a menudo conviene curarlo como vista en `dwh`.
 
-| | |
-|---|---|
-| Host / puerto | `10.8.0.1:5436` (con la VPN) |
-| Base | `maryun_erp` |
-| Usuario | `dwh_lector` — credencial en `/srv/secrets/dwh-lector.env` |
+**Metabase ya no consulta producción por ninguna de las dos.** Para conectarse
+a mano:
+
+| | dwh_lector | erp_lector |
+|---|---|---|
+| Host / puerto | `10.8.0.1:5436` (con la VPN) | igual |
+| Base | `maryun_erp` | igual |
+| Alcance | sólo el esquema `dwh` | `public`, `mig` y `dwh` |
+| Credencial | `/srv/secrets/dwh-lector.env` | `/srv/secrets/erp-lector.env` |
+
+**Los dos roles se crean en el PRIMARIO**, nunca aquí: una réplica no admite
+`CREATE ROLE`. La replicación física los trae en milisegundos, igual que los
+datos.
+
+**Quién ve qué en Metabase (8-sep-2026):** el grupo «All Users» tiene
+`view-data: unrestricted` y `create-queries: query-builder` sobre la nueva
+conexión, así que los cinco usuarios pueden armar preguntas sobre cualquiera de
+las 279 tablas desde la interfaz. Sólo los administradores —Ian y Felipe— tienen
+SQL nativo. Las tablas con credenciales (`UserCredential`, `PortalAccount`,
+`ApiKey`, `TotpCredential`, `SiiCesion`, `mail_connection`) estaban **vacías**
+al montar esto; cuando dejen de estarlo hay que revocarles el `SELECT` a
+`erp_lector`, que es una línea:
+
+```sql
+revoke select on "UserCredential", "PortalAccount", "ApiKey",
+                 "TotpCredential", "SiiCesion", mail_connection
+  from erp_lector;   -- en el PRIMARIO
+```
 
 ## 4 · Lo que hay que vigilar, y es una cosa
 
