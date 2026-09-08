@@ -940,38 +940,53 @@ permiso concedido a nivel de esa base se pierde en el refresco siguiente**. Si
 alguna vez hace falta un `GRANT` ahí, va dentro de `refrescar-preview.sh`, no a
 mano.
 
-**`No space left on device` de Postgres puede no ser el disco.** El dashboard de
-ventas del ERP no cargaba en preview y devolvía
-`53100 could not resize shared memory segment "/PostgreSQL.xxx" to 33554432 bytes:
-No space left on device`. El disco estaba al 3 % y `df -h /dev/shm` dentro del
-contenedor informaba **1 GiB libre**. Las dos lecturas eran ciertas y las dos
-eran irrelevantes: `/dev/shm` es **tmpfs, o sea RAM**, y sus páginas se
-contabilizan contra el **cgroup de memoria del contenedor**, no contra el tamaño
-del tmpfs. `maryun-erp-preview-db` tenía 3 GiB de techo y lo topaba; producción,
-con 8 GiB, hacía el mismo trabajo sin fallar. Tres cosas que quedan:
+**`/dev/shm` en Docker tiene DOS techos independientes, y el mismo error sale por
+los dos.** Es lo que hizo falta diagnosticar esto en dos pasadas: se arregló uno,
+el fallo siguió, y parecía que el diagnóstico había estado mal.
 
-- **El límite que se agota es el del contenedor**, no el del tmpfs ni el del volumen.
-- **`df` miente aquí.** Informa el tamaño del tmpfs, que sigue teniendo sitio
-  mientras el cgroup ya no admite una página más.
-- **La prueba está en el cgroup**, y es inequívoca:
+| techo | qué es | cómo se ve que es ése |
+|---|---|---|
+| `shm_size` | el tamaño del tmpfs montado en `/dev/shm` | muestrear `df -h /dev/shm` **bajo carga** |
+| `memory.max` | el cgroup del contenedor — las páginas de tmpfs **se contabilizan contra él** | `memory.events`, campo `max` |
 
-  ```bash
-  docker exec <contenedor> sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak; cat /sys/fs/cgroup/memory.events'
-  ```
+Los dos dan `53100 could not resize shared memory segment "/PostgreSQL.xxx" to N
+bytes: No space left on device`. Y **en reposo los dos parecen sanos**, que es
+justo lo que confunde: `df` informa el tmpfs entero libre porque la memoria
+compartida dinámica se libera al terminar cada consulta.
 
-  `memory.events: max N` con `N > 0` dice cuántas veces se topó el techo. En
-  preview iba en 4.073 y su `memory.peak` era exactamente su `memory.max`; en
-  producción `max` era 0. Eso cerró el diagnóstico en un minuto después de dos
-  hipótesis falsas construidas sobre `df`.
+```bash
+# ¿el cgroup? `max N` con N > 0 dice cuántas veces se topó el techo
+docker exec <contenedor> grep -E '^(max|oom) ' /sys/fs/cgroup/memory.events
+docker exec <contenedor> sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak'
 
-Subir el techo de preview a 8 GiB lo destapó, pero **no era el arreglo**: la
-consulta pedía ~3,5 GiB por sí sola porque la pantalla se abría **sin filtro de
-fecha** y agregaba 1,27 millones de líneas de venta enteras — un orden externo de
-180 MB y una tabla hash de 90 MB **en memoria compartida**, multiplicado por las
-ocho consultas que la página lanza a la vez. Acotarla al mes en curso la bajó de
-2.953 ms a 213 ms y el hash de 90 MB a 2,4 MB. La regla general: **antes de pedir
-RAM, pide el plan** (`EXPLAIN (ANALYZE, BUFFERS)`), y mídelo en preview, que para
-eso está.
+# ¿el tmpfs? sólo se ve MIENTRAS la carga corre
+for n in $(seq 1 15); do sleep 0.3; docker exec <contenedor> df -h /dev/shm | tail -1; done
+```
+
+**El caso, con su cronología, porque explica el falso final.** El dashboard de
+ventas no cargaba en preview. Primera pasada: `maryun-erp-preview-db` tenía
+3 GiB de cgroup y `memory.events: max` en **4.073**, con `memory.peak` igual a
+`memory.max`. Se subió a 8 GiB a las 21:11 — y los errores siguieron, de 21:27 a
+21:33. Segunda pasada, muestreando bajo carga: el tmpfs de 1 GiB llegaba a
+**1008 MB, 17 MB libres**. Eran dos techos a la vez, y el primero tapaba al
+segundo.
+
+**El arreglo no era ninguno de los dos techos, era la consulta.** La pantalla se
+abría **sin filtro de fecha** y agregaba 1,27 millones de líneas de venta: un
+orden externo de 180 MB a disco y una tabla hash de 90 MB **en memoria
+compartida**, por las ocho consultas que lanzaba a la vez. Acotarla a doce meses,
+cortar una consulta que recorría toda la historia a propósito y repartirlas en dos
+tandas bajó el pico de `/dev/shm` de **1008 MB a 5 MB** con nueve consultas
+simultáneas (`cd71cd9` en el ERP). Con eso, 1 GiB deja ~200 veces de holgura y
+**no se subió `shm_size`**: dimensionar un techo de 4 GiB por una consulta que
+pide 5 MB deja una configuración que nadie se atreve a bajar tres años después.
+
+Dos reglas que quedan:
+
+- **Antes de pedir RAM, pide el plan** (`EXPLAIN (ANALYZE, BUFFERS)`), y mídelo en
+  preview, que para eso está. Un techo compra tiempo; el plan dice si hace falta.
+- **Si hay que subir un techo como parche**, se escribe como temporal, con fecha y
+  con la condición que lo retira.
 
 **`X-Frame-Options: DENY` rompe cualquier visor propio.** El ERP servía los
 adjuntos con `DENY` y los incrustaba en un `<iframe>` suyo: el navegador se
