@@ -307,6 +307,7 @@ UIDs conocidos, por si hay que ajustar permisos de un bind mount: ClickHouse
 | `monitoreo` | `uptime-kuma`, `beszel`, `monitoreo-socket-proxy` | vigilancia |
 | `maryun-erp` | `maryun-erp-db` | Postgres del ERP nuevo (producción) |
 | `maryun-erp-preview-db` | `maryun-erp-preview-db` | Postgres **sólo de preview**, instancia aparte y sin archivado de WAL |
+| `maryun-erp-replica` | `maryun-erp-replica` | **réplica de solo lectura** de `maryun_erp`; es la que consulta Metabase |
 | (Coolify) | `coolify`, `-db`, `-redis`, `-proxy`, `-realtime`, `-sentinel` | plataforma de despliegue |
 | (Coolify) | dos contenedores con nombre de UUID | el ERP: producción y preview |
 
@@ -346,6 +347,7 @@ desde ahí, no las copies a ningún sitio.
 | ClickHouse | `10.8.0.1:8123` (HTTP), `:9000` (nativo) | `clickhouse:8123` / `:9000` | `admin`, `bi`, `mage`, `mcp`, `default` | `clickhouse.env` |
 | Postgres del ERP | `10.8.0.1:5433` | `maryun-erp-db:5432` | `maryun`, `dwh_lector` | `maryun-erp-db.env`, `dwh-lector.env` |
 | Postgres de preview | `10.8.0.1:5435` | `maryun-erp-preview-db:5432` | `maryun` | `maryun-erp-preview-db.env` |
+| **Réplica de lectura del ERP** | `10.8.0.1:5436` | `maryun-erp-replica:5432` | `dwh_lector` | `dwh-lector.env` |
 | Postgres espejo | `10.8.0.1:5434` | `dwh-postgres:5432` | `dwh`, `bi_lector` | `dwh-postgres.env` |
 | MySis (el ERP viejo) | `10.8.0.1:3307` | `mysis_tunnel:3306` | `appread` (**sólo lectura**) | en `io_config.yaml` de Mage |
 
@@ -1116,6 +1118,7 @@ decir con qué valores.
 | `/srv/README.md` | la convención de `/srv`, con permisos y UIDs |
 | **`docs/EMERGENCIA.md`** | **empieza por aquí si algo se cayó** |
 | `docs/pitr.md` | recuperación a un instante: cómo funciona, cómo restaurar, sus trampas |
+| `docs/replica-lectura.md` | la réplica que atiende a Metabase, y el slot que hay que vigilar |
 | `docs/preview.md` | el refresco diario de producción a preview, y por qué preview tiene su propia instancia |
 | `docs/estructura-srv.md` | detalle de la estructura |
 | `docs/monitoreo.md` | la vigilancia interna |

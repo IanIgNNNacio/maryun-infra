@@ -1,0 +1,93 @@
+name: maryun-erp-replica
+
+# Replica de SOLO LECTURA de maryun-erp-db, por replicacion en flujo.
+#
+# Para que: los tableros pesados no deben consultar la base que factura. El
+# 7-sep-2026 una sola pantalla del ERP, con un usuario, agoto la memoria
+# compartida del primario. Metabase ademas consultaba `maryun_erp` en directo.
+# Aqui esas consultas van contra una copia que se mantiene sola.
+#
+# Por que replicacion en flujo y no un ETL: no hay catalogo de tablas que
+# mantener ni desfase que explicar. Lo que se escribe en el primario aparece
+# aqui en milisegundos, y una consulta absurda la aguanta esta maquina, no la
+# que atiende a las personas.
+#
+# Es de solo lectura por construccion, no por permisos: un hot standby de
+# PostgreSQL rechaza cualquier escritura. No hay forma de estropear datos desde
+# aqui aunque alguien se conecte con el superusuario.
+#
+# Ojo: la replicacion fisica copia el CLUSTER entero, asi que esta replica
+# tambien tiene maryun_ecommerce y maryun_ecommerce_preview.
+#
+# Montada el 8-sep-2026. Detalle en maryun-infra/docs/replica-lectura.md.
+
+services:
+  db:
+    # La imagen con pgbackrest: si la replica se queda atras mas de lo que
+    # retiene el slot, se pone al dia desde el archivo de WAL en vez de tener
+    # que rehacer la copia base. Ver restore_command en postgresql.auto.conf.
+    image: maryun/postgres-pgbackrest:18.6
+    container_name: maryun-erp-replica
+    restart: unless-stopped
+
+    environment:
+      TZ: America/Santiago
+
+    # Solo por la VPN. Puerto distinto del primario (5433) y de preview (5435).
+    ports:
+      - "10.8.0.1:5436:5432"
+
+    volumes:
+      - /srv/stacks/maryun-erp-replica/db:/var/lib/postgresql
+      # De solo lectura: la replica LEE el archivo de WAL, nunca escribe en el.
+      - /srv/pitr:/var/lib/pgbackrest:ro
+      - /srv/stacks/maryun-erp/pgbackrest:/etc/pgbackrest:ro
+
+    # tmpfs de memoria compartida. Los planes paralelos ponen ahi sus tablas
+    # hash, y el 7-sep-2026 el tablero de ventas lleno 1 GiB en el primario.
+    # Aqui se deja igual: es la maquina que ahora recibe ese trabajo.
+    shm_size: 1g
+
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "effective_cache_size=6GB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      # max_connections tiene que ser >= al del primario (200). PostgreSQL se
+      # niega a arrancar una replica con menos plazas de las que tenia el
+      # origen: "recovery aborted because of insufficient parameter settings".
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "hot_standby=on"
+      - "-c"
+      - "log_min_duration_statement=5000"
+      # SIN archive_mode: una replica no archiva. El PITR lo sostiene el
+      # primario.
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maryun -d maryun_erp"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+    networks: [data]
+
+networks:
+  data:
+    name: data
+    external: true

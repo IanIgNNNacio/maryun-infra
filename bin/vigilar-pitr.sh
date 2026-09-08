@@ -162,7 +162,35 @@ print(max((x["timestamp"]["stop"] for x in b), default=0))' 2>/dev/null)"
     fi
 fi
 
-# ────────────────────────────── 6. edad de la ultima copia fuera del servidor ──
+# ─────────────────────── 6. el slot de la replica, que puede llenar el disco ──
+# Un slot de replicacion obliga al primario a CONSERVAR el WAL hasta que la
+# replica lo consuma. Si la replica muere y el slot se queda, pg_wal crece sin
+# freno: el mismo modo de fallo que un archive_command roto. Hay un techo
+# (max_slot_wal_keep_size = 10GB) que invalida el slot antes de llenar el disco,
+# pero un slot invalidado significa que la replica ya no se pone al dia sola.
+SLOT="$(sql "
+  select slot_name||'|'||coalesce(active::text,'f')||'|'||
+         coalesce((pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)/1048576)::bigint::text,'0')||'|'||
+         coalesce(wal_status,'?')
+  from pg_replication_slots")"
+if [ -n "$SLOT" ]; then
+    IFS='|' read -r S_NOMBRE S_ACTIVO S_MB S_ESTADO <<< "$SLOT"
+    di "slot $S_NOMBRE: activo=$S_ACTIVO retenido=${S_MB} MB estado=$S_ESTADO"
+    # active::text da "true"/"false", no "t"/"f": comparar con "t" disparaba
+    # una alarma falsa con la replica perfectamente conectada.
+    if [ "$S_ACTIVO" != "true" ]; then
+        avisar slot-inactivo           "El slot de replicacion '$S_NOMBRE' esta INACTIVO: la replica no esta conectada.%0AEl primario retiene ${S_MB} MB de WAL esperandola.%0A%0Asudo docker logs maryun-erp-replica"
+    else
+        resuelto slot-inactivo
+    fi
+    if [ "$S_ESTADO" != "reserved" ] && [ "$S_ESTADO" != "extended" ]; then
+        avisar slot-perdido           "El slot '$S_NOMBRE' esta en estado '$S_ESTADO': se paso del techo y ya no retiene el WAL que la replica necesita.%0ALa replica intentara ponerse al dia desde el archivo de pgBackRest; si no puede, hay que rehacer su copia base."
+    else
+        resuelto slot-perdido
+    fi
+fi
+
+# ────────────────────────────── 7. edad de la ultima copia fuera del servidor ──
 if [ -f "$STAMP_EXTERNO" ]; then
     HORAS_EXT=$(( ( $(date +%s) - $(date -d "$(cat "$STAMP_EXTERNO")" +%s) ) / 3600 ))
     di "ultima copia a R2: hace ${HORAS_EXT} h"
