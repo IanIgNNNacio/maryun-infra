@@ -317,7 +317,8 @@ UIDs conocidos, por si hay que ajustar permisos de un bind mount: ClickHouse
 | dato | dónde |
 |---|---|
 | ClickHouse (`dwh`) | `/srv/stacks/clickhouse/data` |
-| Postgres del ERP (`maryun_erp`, `maryun_erp_preview`) | `/srv/stacks/maryun-erp/db` |
+| Postgres del ERP (`maryun_erp`) | `/srv/stacks/maryun-erp/db` |
+| Postgres de preview del ERP (`maryun_erp_preview`) | `/srv/stacks/maryun-erp-preview-db/db` — **stack aparte** |
 | Postgres espejo (`dwh_espejo`) | `/srv/stacks/dwh-postgres/db` |
 | Metabase (su propia base) | `/srv/stacks/metabase/db` |
 | Superset (su metastore) | `/srv/stacks/superset/db` |
@@ -938,6 +939,39 @@ de entorno rechaza `is_build_time` con un 422.
 permiso concedido a nivel de esa base se pierde en el refresco siguiente**. Si
 alguna vez hace falta un `GRANT` ahí, va dentro de `refrescar-preview.sh`, no a
 mano.
+
+**`No space left on device` de Postgres puede no ser el disco.** El dashboard de
+ventas del ERP no cargaba en preview y devolvía
+`53100 could not resize shared memory segment "/PostgreSQL.xxx" to 33554432 bytes:
+No space left on device`. El disco estaba al 3 % y `df -h /dev/shm` dentro del
+contenedor informaba **1 GiB libre**. Las dos lecturas eran ciertas y las dos
+eran irrelevantes: `/dev/shm` es **tmpfs, o sea RAM**, y sus páginas se
+contabilizan contra el **cgroup de memoria del contenedor**, no contra el tamaño
+del tmpfs. `maryun-erp-preview-db` tenía 3 GiB de techo y lo topaba; producción,
+con 8 GiB, hacía el mismo trabajo sin fallar. Tres cosas que quedan:
+
+- **El límite que se agota es el del contenedor**, no el del tmpfs ni el del volumen.
+- **`df` miente aquí.** Informa el tamaño del tmpfs, que sigue teniendo sitio
+  mientras el cgroup ya no admite una página más.
+- **La prueba está en el cgroup**, y es inequívoca:
+
+  ```bash
+  docker exec <contenedor> sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak; cat /sys/fs/cgroup/memory.events'
+  ```
+
+  `memory.events: max N` con `N > 0` dice cuántas veces se topó el techo. En
+  preview iba en 4.073 y su `memory.peak` era exactamente su `memory.max`; en
+  producción `max` era 0. Eso cerró el diagnóstico en un minuto después de dos
+  hipótesis falsas construidas sobre `df`.
+
+Subir el techo de preview a 8 GiB lo destapó, pero **no era el arreglo**: la
+consulta pedía ~3,5 GiB por sí sola porque la pantalla se abría **sin filtro de
+fecha** y agregaba 1,27 millones de líneas de venta enteras — un orden externo de
+180 MB y una tabla hash de 90 MB **en memoria compartida**, multiplicado por las
+ocho consultas que la página lanza a la vez. Acotarla al mes en curso la bajó de
+2.953 ms a 213 ms y el hash de 90 MB a 2,4 MB. La regla general: **antes de pedir
+RAM, pide el plan** (`EXPLAIN (ANALYZE, BUFFERS)`), y mídelo en preview, que para
+eso está.
 
 **`X-Frame-Options: DENY` rompe cualquier visor propio.** El ERP servía los
 adjuntos con `DENY` y los incrustaba en un `<iframe>` suyo: el navegador se
