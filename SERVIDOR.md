@@ -757,7 +757,8 @@ cada 15 min, los adjuntos cada hora) dan igual.
 | `maryun-pitr-externo` | cada 15 min | empuja el repositorio de PITR a R2, cifrado |
 | `maryun-pitr-vigilar` | cada 10 min | vigila el archivado de WAL, `pg_wal` y el espacio |
 | `maryun-pitr-ensayo` | 1.er domingo de mes | **restaura de verdad** y avisa si falla |
-| `maryun-espejo-postgres` | 07:30 UTC | refresca el Postgres espejo |
+| `maryun-espejo-postgres` | 07:30 UTC | refresca el Postgres espejo (las 37 tablas, completas) |
+| `maryun-espejo-ventas` | **cada 15 min** | trae a `mysis.ventas_mysis` lo que entró a ClickHouse desde la última vez. 0,8 s por corrida. Detalle en [`docs/postgres-espejo.md`](docs/postgres-espejo.md) |
 | `maryun-preview` | 05:10 UTC | copia producción a preview (base y bucket) y reinicia la aplicación. Se salta si existe `/srv/PREVIEW-CONGELADO`. Detalle en [`docs/preview.md`](docs/preview.md) |
 | `maryun-discos` | diario | lee el SMART de los NVMe |
 | `maryun-red` | cada minuto | registra caídas de red con su duración |

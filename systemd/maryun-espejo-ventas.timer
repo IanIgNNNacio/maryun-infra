@@ -1,0 +1,16 @@
+[Unit]
+Description=Ventas de MySis al espejo cada 15 minutos
+
+[Timer]
+# Cada cuarto de hora, todo el dia. MySis solo factura entre las 11:00 y las
+# 22:00 UTC, pero el lote nocturno de Mage (0 0 * * *) rellena hacia atras y
+# tambien hay que recogerlo, asi que no se acota el horario: cada corrida en
+# seco cuesta menos de un segundo.
+OnCalendar=*:0/15
+# Sin Persistent: si la maquina estuvo apagada no interesa recuperar las
+# corridas perdidas, la siguiente trae todo lo acumulado igual.
+RandomizedDelaySec=30s
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

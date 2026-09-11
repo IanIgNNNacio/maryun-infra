@@ -1,0 +1,23 @@
+[Unit]
+# Acerca mysis.ventas_mysis del espejo a lo que ya tiene ClickHouse.
+#
+# Convive con maryun-espejo-postgres (07:30 UTC), que sigue siendo el que manda:
+# aquel copia las 37 tablas enteras y corrige borrados y cambios; este solo
+# inserta ventas nuevas, 96 veces al dia, en menos de un segundo.
+#
+# Detalle en maryun-infra/docs/postgres-espejo.md.
+Description=Ventas de MySis al espejo Postgres, incremental
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/bin/espejo-ventas-incremental.py --hazlo
+# Por debajo del volcado nocturno y de cualquier consulta de tablero.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+# Una corrida normal tarda 0,8 s. Si pasa de dos minutos, algo esta mal.
+TimeoutStartSec=2min
+StandardOutput=append:/var/log/maryun-espejo-ventas.log
+StandardError=append:/var/log/maryun-espejo-ventas.log

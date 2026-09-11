@@ -78,10 +78,129 @@ sudo /srv/bin/espejo-mysis-a-postgres.py --hazlo --tabla ventas_mysis
 sudo /srv/bin/espejo-mysis-a-postgres.py            # sólo lista, no copia
 ```
 
-**El espejo es una instantánea.** `ventas_mysis` recibe filas durante el día:
-entre dos mediciones de esta misma tarde pasó de 1.649.834 a 1.649.906. Para
-cualquier comparación entre los dos motores hay que usar un período **cerrado**,
-o las diferencias serán de calendario y no de datos.
+**El volcado completo es una instantánea.** `ventas_mysis` recibe filas durante
+el día: entre dos mediciones de una misma tarde pasó de 1.649.834 a 1.649.906.
+Para cualquier comparación entre los dos motores hay que usar un período
+**cerrado**, o las diferencias serán de calendario y no de datos.
+
+### Y encima, un incremental cada 15 minutos
+
+Desde el 11-sep-2026 `mysis.ventas_mysis` ya no espera al volcado de la noche.
+`maryun-espejo-ventas.timer` corre `/srv/bin/espejo-ventas-incremental.py
+--hazlo` en el minuto 0, 15, 30 y 45 de cada hora, y tarda **0,8 segundos**.
+
+Por qué un guion aparte en vez de correr el volcado completo cada cuarto de
+hora, que habría sido una línea: porque el volcado copia la tabla entera con
+`TRUNCATE` + `COPY`, y ese `TRUNCATE` toma `ACCESS EXCLUSIVE` durante los diez
+segundos que dura. En horario laboral eso es un tablero congelado cada quince
+minutos. El incremental sólo inserta.
+
+Cómo decide qué traer:
+
+1. marca de agua = `max(ingested_at)` del espejo
+2. ClickHouse devuelve las filas con `ingested_at >= marca`
+3. van a una tabla de paso `UNLOGGED`
+4. se insertan las que no estén ya, comparando por `(pid, sku)`
+
+El `>=` no es un descuido: `ingested_at` tiene resolución de segundo y un lote
+puede repartirse entre dos corridas, así que con `>` se perderían las filas que
+compartan segundo con la última traída. Repetirlas no cuesta nada porque el
+anti-join las descarta. Medido en la primera corrida real: 1.128 filas traídas,
+1.079 insertadas, 49 ya estaban.
+
+**El volcado de las 07:30 sigue siendo el que manda**, y no sobra. El
+incremental no borra ni actualiza: si alguien borra filas en ClickHouse —pasó,
+cuatro mutaciones `DELETE` el 2026-09-03— aquí quedarían de fantasma hasta el
+volcado. Y el exportador de Mage tampoco actualiza: una vez cargada una línea,
+sus columnas `deuda`, `pmp`, `factura` y `entregado` quedan fijas para siempre.
+**Para cobranza no se usa este espejo**: el saldo vivo está en `Receivable` del
+ERP.
+
+```bash
+sudo /srv/bin/espejo-ventas-incremental.py            # dice qué traería
+sudo /srv/bin/espejo-ventas-incremental.py --hazlo
+sudo systemctl list-timers maryun-espejo-ventas.timer
+tail -n 40 /var/log/maryun-espejo-ventas.log
+```
+
+La tabla llegaba **sin ningún índice** —el volcado es `TRUNCATE` + `COPY` y
+nadie los había necesitado—. Ahora tiene tres, creados desde `vistas.sql`:
+`(pid, sku)` para el anti-join, `ingested_at` para la marca de agua (leerla sin
+índice costaba 105 ms de `Parallel Seq Scan` sobre 111.752 bloques) y
+`facturado` para el filtro de fecha de los tableros. `(pid, sku)` va **sin
+`UNIQUE`** a propósito, aunque hoy los 1.654.102 pares sean distintos: un
+duplicado que se colara en ClickHouse abortaría el volcado nocturno entero y
+dejaría el espejo congelado sin que se note.
+
+## La capa `global`: MySis y el ERP en la misma vista
+
+`global.ventas` junta, en el grano de **una línea de venta**, las dos mitades
+del negocio:
+
+| | de dónde | cuántas líneas | frescura |
+|---|---|---|---|
+| `origen = 'MYSIS'` | `mysis.ventas_mysis` | 1.655.181, desde 2018-05-17 | 15 min |
+| `origen = 'ERP'` | la réplica del ERP, por `postgres_fdw` | **0 hoy** | en vivo |
+
+Que la mitad del ERP esté vacía es correcto, no un fallo: las 478.475 ventas de
+producción son migradas —`legacyRef` no nulo en el 100%— y **ninguna nació en
+el ERP**. La vista se llenará sola con el primer despacho.
+
+**`legacyRef IS NULL` es el criterio de origen**, y es sólido: ningún camino del
+ERP escribe esa columna (el `create` de `sale-service.ts` enumera campos uno por
+uno, `createSaleSchema` no la lista, y `CreateSaleInput` no la declara), y
+ninguno de los cuatro `UPDATE` que existen sobre `Sale` la toca. El índice único
+que ya tenía sirve para el `IS NULL`: **0,035 ms**.
+
+**Por qué FDW y no un ETL de las ventas del ERP.** No hay nada que agendar ni
+desfase que explicar; pero sobre todo, `Sale` **no tiene `createdAt` ni
+`updatedAt`** —28 columnas, ninguna de auditoría—, así que un incremental por
+marca de agua del lado del ERP no tendría de dónde agarrarse.
+
+**Los cuatro enum se recrean aquí.** `SaleStatus`, `SaleDocType`, `Origin` y
+`StockMoveType` existen como tipos en `dwh_espejo` con las mismas etiquetas. El
+primer intento fue declararlos `text` en las tablas foráneas, y falla: como
+`postgres_fdw` empuja el `WHERE` al servidor remoto, allí la columna sigue
+siendo del enum y `status <> ALL ('{DRAFT,CANCELLED}'::text[])` revienta con
+*«operator does not exist: public."SaleStatus" <> text»*. El cast explícito
+tampoco salva, porque siendo `text`→`text` en local se borra antes de
+deparsear. El precio de la solución: si Prisma añade una etiqueta, hay que
+añadirla aquí o la lectura de esa fila fallará.
+
+**El costo de la mitad del ERP sale de `StockMovement` vía `Delivery`**, igual
+que en `domain/reports/sales-fact.ts`, y no de `SaleLine.histUnitCost`: esa
+columna es del importador y en una venta nativa siempre será `NULL`. Usarla
+daría costo 0 y margen 100%, que es justamente el fallo que hoy tiene
+`/reportes/ventas` en el ERP.
+
+**Red de seguridad.** El rol `erp_lector`, que es el que viaja por el FDW, lleva
+`statement_timeout = 120s`. La réplica tiene `max_standby_streaming_delay = 30s`
+y `hot_standby_feedback = on`: una consulta larga contra la réplica hace que el
+**primario** retenga tuplas muertas mientras corra, así que conviene que no
+pueda correr para siempre.
+
+### ¿Hace falta materializarla? Todavía no
+
+Medido el 11-sep-2026 sobre las 1.655.181 líneas, tiempos en caliente:
+
+| tile | tiempo |
+|---|---|
+| venta y margen por mes, 24 meses | 567 ms |
+| venta por sucursal, todo el histórico | 993 ms |
+| venta y margen por familia | 1.041 ms |
+| top 100 clientes | 1.074 ms |
+
+Un tile de historia completa cuesta **alrededor de un segundo**; con filtro de
+fecha, la mitad. El umbral acordado para materializar es **dos segundos por
+tile**, y no se alcanza. Cuando se alcance —crecimiento del histórico, o
+decenas de miles de ventas nativas encareciendo el lado del FDW— el camino es
+`REFRESH MATERIALIZED VIEW CONCURRENTLY` enganchado detrás del incremental, que
+exige antes un índice único sobre la vista. **Medir primero.**
+
+Todo esto vive en `/srv/stacks/dwh-postgres/vistas.sql`, que el volcado nocturno
+reaplica entero al terminar. Es el único sitio donde ponerlo: si alguna vez
+cambian las columnas de `ventas_mysis`, el volcado hace `DROP TABLE ... CASCADE`
+y se lleva la vista por delante; `vistas.sql` la devuelve.
 
 ## Que el espejo es fiel: la prueba
 
