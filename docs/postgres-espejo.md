@@ -83,16 +83,16 @@ el día: entre dos mediciones de una misma tarde pasó de 1.649.834 a 1.649.906.
 Para cualquier comparación entre los dos motores hay que usar un período
 **cerrado**, o las diferencias serán de calendario y no de datos.
 
-### Y encima, un incremental cada 15 minutos
+### Y encima, un incremental cada 10 minutos
 
 Desde el 11-sep-2026 `mysis.ventas_mysis` ya no espera al volcado de la noche.
 `maryun-espejo-ventas.timer` corre `/srv/bin/espejo-ventas-incremental.py
---hazlo` en el minuto 0, 15, 30 y 45 de cada hora, y tarda **0,8 segundos**.
+--hazlo` en el minuto 0, 10, 20, 30, 40 y 50 de cada hora, y tarda **0,8 segundos**.
 
-Por qué un guion aparte en vez de correr el volcado completo cada cuarto de
-hora, que habría sido una línea: porque el volcado copia la tabla entera con
+Por qué un guion aparte en vez de correr el volcado completo cada diez
+minutos, que habría sido una línea: porque el volcado copia la tabla entera con
 `TRUNCATE` + `COPY`, y ese `TRUNCATE` toma `ACCESS EXCLUSIVE` durante los diez
-segundos que dura. En horario laboral eso es un tablero congelado cada quince
+segundos que dura. En horario laboral eso es un tablero congelado cada diez
 minutos. El incremental sólo inserta.
 
 Cómo decide qué traer:
@@ -244,6 +244,39 @@ por `ingested_at`, y estas filas llevan la marca de cuando se cargaron en la
 tabla de pruebas, anterior a la marca de agua del espejo. Después de una
 operación así hay que correr el volcado completo a mano. Es el mismo motivo por
 el que el volcado nocturno no se puede quitar.
+
+## El rol que usa la aplicación, y por qué no es el de Metabase
+
+Las nueve pantallas de reportes del ERP leen este Postgres, no la base que
+factura. Entran con **`erp_reportes`**, un rol propio y de sólo lectura, aparte
+del `bi_lector` de Metabase por un motivo concreto: `bi_lector` puede escribir
+en el esquema `manual`, y la aplicación no tiene por qué poder.
+
+| | |
+|---|---|
+| host desde la aplicación | `dwh-postgres:5432` (red docker `coolify`) |
+| base | `dwh_espejo` |
+| alcance | `SELECT` en `erp`, `global` y `mysis` |
+| credencial | `/srv/secrets/erp-reportes.env` |
+| variable en Coolify | `REPORTES_DATABASE_URL`, en producción y en preview |
+
+**El `search_path` va en el ROL, no en la cadena de conexión:**
+
+```sql
+ALTER ROLE erp_reportes SET search_path = erp, public;
+```
+
+Eso es lo que hace que el cambio sea barato. Con `erp` primero en la ruta, el
+SQL que el ERP ya tenía escrito —`"Sale"`, `"SaleLine"`, `"Party"`— resuelve
+contra las tablas foráneas **sin reescribir una sola consulta**, y sigue
+leyendo el dato del ERP en vivo porque esas tablas son el FDW contra la
+réplica. El nivel 3 nombra `global.ventas` con su esquema delante, así que no
+le afecta. Ponerlo en el rol y no en el DSN también significa que lo hereda
+cualquier cliente —Prisma, `psql`, un pool— sin depender de que sepa pasarlo.
+
+`dwh-postgres` se conectó además a la red docker `coolify`, que es donde vive
+el contenedor de la aplicación. Antes sólo estaba en `data` y desde la
+aplicación no había ruta.
 
 ## Los tres niveles de tablero
 

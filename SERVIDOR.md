@@ -348,7 +348,7 @@ desde ahí, no las copies a ningún sitio.
 | Postgres del ERP | `10.8.0.1:5433` | `maryun-erp-db:5432` | `maryun`, `dwh_lector`, `erp_lector` | `maryun-erp-db.env`, `dwh-lector.env`, `erp-lector.env` |
 | Postgres de preview | `10.8.0.1:5435` | `maryun-erp-preview-db:5432` | `maryun` | `maryun-erp-preview-db.env` |
 | **Réplica de lectura del ERP** | `10.8.0.1:5436` | `maryun-erp-replica:5432` | `dwh_lector`, `erp_lector` | `dwh-lector.env`, `erp-lector.env` |
-| Postgres espejo | `10.8.0.1:5434` | `dwh-postgres:5432` | `dwh`, `bi_lector` | `dwh-postgres.env` |
+| Postgres espejo — **y base de reportes** | `10.8.0.1:5434` | `dwh-postgres:5432` | `dwh`, `bi_lector`, `erp_reportes` | `dwh-postgres.env`, `erp-reportes.env` |
 | MySis (el ERP viejo) | `10.8.0.1:3307` | `mysis_tunnel:3306` | `appread` (**sólo lectura**) | en `io_config.yaml` de Mage |
 
 ClickHouse tiene **un usuario por función**, no uno para todo: `bi` es el que
@@ -758,7 +758,7 @@ cada 15 min, los adjuntos cada hora) dan igual.
 | `maryun-pitr-vigilar` | cada 10 min | vigila el archivado de WAL, `pg_wal` y el espacio |
 | `maryun-pitr-ensayo` | 1.er domingo de mes | **restaura de verdad** y avisa si falla |
 | `maryun-espejo-postgres` | 07:30 UTC | refresca el Postgres espejo (las 37 tablas, completas) |
-| `maryun-espejo-ventas` | **cada 15 min** | trae a `mysis.ventas_mysis` lo que entró a ClickHouse desde la última vez. 0,8 s por corrida. Detalle en [`docs/postgres-espejo.md`](docs/postgres-espejo.md) |
+| `maryun-espejo-ventas` | **cada 10 min** | trae a `mysis.ventas_mysis` lo que entró a ClickHouse desde la última vez. 0,8 s por corrida. Detalle en [`docs/postgres-espejo.md`](docs/postgres-espejo.md) |
 | `maryun-preview` | 05:10 UTC | copia producción a preview (base y bucket) y reinicia la aplicación. Se salta si existe `/srv/PREVIEW-CONGELADO`. Detalle en [`docs/preview.md`](docs/preview.md) |
 | `maryun-discos` | diario | lee el SMART de los NVMe |
 | `maryun-red` | cada minuto | registra caídas de red con su duración |
