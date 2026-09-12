@@ -210,6 +210,26 @@ y `hot_standby_feedback = on`: una consulta larga contra la réplica hace que el
 **primario** retenga tuplas muertas mientras corra, así que conviene que no
 pueda correr para siempre.
 
+### Cinco columnas que la importación dejó fuera
+
+El `IMPORT FOREIGN SCHEMA` se hizo con una lista recortada y faltaban cinco
+cosas que los tableros del ERP sí usan: `ProductVariant.color`,
+`ProductVariant.size`, `Product.categoryId`, la tabla `ProductCategory` entera y
+`Party.kind`. Sin ellas, los niveles 1 y 2 revientan en cuanto alguien abre una
+pestaña con dimensión de producto o escribe dos letras en el buscador de
+cliente — y **no se descubre en desarrollo**, porque contra producción esas
+columnas existen.
+
+Están añadidas, pero lo importante es **dónde**: en `vistas.sql`, no como un
+`ALTER FOREIGN TABLE` suelto. El volcado nocturno rehace las tablas foráneas en
+cada pasada, así que un `ALTER` a mano habría durado hasta las 07:30 del día
+siguiente y el fallo habría vuelto solo, sin que nadie relacionara una cosa con
+la otra.
+
+`Party.kind` va con su enum de verdad, `PartyKind`, y no como `text`, por el
+mismo motivo que los otros seis: `postgres_fdw` empuja el `WHERE` al servidor
+remoto, donde la columna sigue siendo del enum.
+
 ### La historia de MySis estaba rota antes de 2022, y se arregló
 
 Al construir el tablero del nivel 3 salió a la luz: `dwh.ventas_mysis` tenía

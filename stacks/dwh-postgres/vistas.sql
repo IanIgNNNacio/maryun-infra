@@ -114,6 +114,9 @@ DO $enum$ BEGIN
   IF to_regtype('public."ReceivableKind"') IS NULL THEN
     CREATE TYPE public."ReceivableKind" AS ENUM ('SALE','MANUAL','DEBIT_NOTE');
   END IF;
+  IF to_regtype('public."PartyKind"') IS NULL THEN
+    CREATE TYPE public."PartyKind" AS ENUM ('CUSTOMER','SUPPLIER','BOTH','COLLABORATOR');
+  END IF;
   IF to_regtype('public."StockMoveType"') IS NULL THEN
     CREATE TYPE public."StockMoveType" AS ENUM ('RECEIPT','ISSUE','ADJUSTMENT',
       'TRANSFER_IN','TRANSFER_OUT','PICK','RETURN','REVALUATION',
@@ -127,7 +130,7 @@ DROP FOREIGN TABLE IF EXISTS
   erp."Sale", erp."SaleLine", erp."Party", erp."ProductVariant", erp."Product",
   erp."ProductFamily", erp."Brand", erp."ProductType", erp."Branch", erp."User",
   erp."Delivery", erp."StockMovement",
-  erp."Receivable", erp."InventoryItem", erp."Warehouse" CASCADE;
+  erp."Receivable", erp."InventoryItem", erp."Warehouse", erp."ProductCategory" CASCADE;
 
 CREATE FOREIGN TABLE erp."Sale" (
   id text, number text, "customerId" text, "salespersonId" text,
@@ -142,17 +145,27 @@ CREATE FOREIGN TABLE erp."SaleLine" (
   "unitPrice" numeric(18,4), total numeric(18,2), "histUnitCost" numeric(18,2)
 ) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'SaleLine');
 
+-- `kind` hace falta para el autocompletado de cliente, y va con su enum de
+-- verdad y no como text: postgres_fdw deparsaria `kind = 'CUSTOMER'::text` y el
+-- remoto responderia «operator does not exist: PartyKind = text».
 CREATE FOREIGN TABLE erp."Party" (
-  id text, rut text, "businessName" text
+  id text, rut text, "businessName" text, kind public."PartyKind"
 ) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'Party');
 
+-- color y size arman la etiqueta de «variante» de los tableros. Sin ellas, la
+-- consulta de hechos muere con «column v.color does not exist» en cuanto
+-- alguien abre una pestana con dimension de producto.
 CREATE FOREIGN TABLE erp."ProductVariant" (
-  id text, sku text, "productId" text
+  id text, sku text, "productId" text, color text, size text
 ) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'ProductVariant');
 
 CREATE FOREIGN TABLE erp."Product" (
-  id text, name text, "familyId" text, "brandId" text, "typeId" text, origin public."Origin"
+  id text, name text, "familyId" text, "brandId" text, "typeId" text,
+  "categoryId" text, origin public."Origin"
 ) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'Product');
+
+CREATE FOREIGN TABLE erp."ProductCategory" (id text, name text)
+  SERVER erp_replica OPTIONS (schema_name 'public', table_name 'ProductCategory');
 
 CREATE FOREIGN TABLE erp."ProductFamily" (id text, name text)
   SERVER erp_replica OPTIONS (schema_name 'public', table_name 'ProductFamily');
@@ -314,3 +327,16 @@ COMMENT ON VIEW global.ventas IS
 GRANT USAGE ON SCHEMA global, erp TO bi_lector;
 GRANT SELECT ON ALL TABLES IN SCHEMA erp TO bi_lector;
 GRANT SELECT ON global.ventas TO bi_lector;
+
+-- ---------------------------------------------------------------------------
+-- 4 - Topes de consulta del rol que usa la aplicacion
+--
+-- Van aqui, con el resto, porque son del mismo contrato: el rol ya lleva el
+-- search_path fijado y esto es lo que impide que una agregacion desbocada del
+-- nivel 3 se quede para siempre. Y no es solo que ocupe este motor: mientras
+-- corre mantiene abierta su conexion postgres_fdw contra la REPLICA, que es
+-- justo la maquina que se queria proteger. Prisma no cancela la consulta en el
+-- servidor cuando su pool_timeout vence -el backend sigue trabajando-, asi que
+-- este es el unico freno real.
+ALTER ROLE erp_reportes SET statement_timeout = '45s';
+ALTER ROLE erp_reportes SET idle_in_transaction_session_timeout = '30s';
