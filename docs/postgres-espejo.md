@@ -132,6 +132,37 @@ nadie los había necesitado—. Ahora tiene tres, creados desde `vistas.sql`:
 duplicado que se colara en ClickHouse abortaría el volcado nocturno entero y
 dejaría el espejo congelado sin que se note.
 
+## Una sola base de reportes, y por qué no son tres
+
+Es fácil contar tres bases y no son tres:
+
+| | qué es | para qué |
+|---|---|---|
+| `maryun-erp-db` `:5433` | la base del ERP | **operar**. Es donde la aplicación escribe |
+| `maryun-erp-replica` `:5436` | **la misma base**, puerta de sólo lectura | que una consulta pesada no toque la que factura |
+| `dwh-postgres` `:5434` | el segundo Postgres | **la única base de reportes** |
+
+La réplica **no es otra base de datos**: es un *hot standby* físico, los mismos
+bytes, a 0 de retraso. No hay dato ahí que no esté en producción.
+
+Así que fuentes de reporte hay **una**: `dwh-postgres`, y dentro de ella una
+vista, `global.ventas`. La columna `origen` decide qué mira cada tablero:
+
+| tablero | consulta |
+|---|---|
+| los «global» | `global.ventas` entera |
+| los «ERP» | `global.ventas WHERE origen = 'ERP'` |
+| las pantallas que ya existían | su propia base, por Prisma. Un ERP lee su base |
+
+**El filtro por `origen` no cuesta nada**, y eso no es una suposición: Postgres
+propaga la condición a cada rama del `UNION ALL`, ve que `'MYSIS' = 'ERP'` es
+falso y **poda la rama de MySis entera**. El plan medido de un tablero «ERP» ni
+siquiera menciona `ventas_mysis`: 30 ms, 5 bloques, todo empujado por FDW al
+ERP. No se leen 1,65 millones de filas para descartarlas.
+
+Metabase necesita entonces **una sola conexión** para los seis tableros nuevos:
+«Postgres espejo MySis», cuyo filtro de esquemas pasó a `mysis,manual,global`.
+
 ## La capa `global`: MySis y el ERP en la misma vista
 
 `global.ventas` junta, en el grano de **una línea de venta**, las dos mitades
@@ -142,7 +173,7 @@ del negocio:
 | `origen = 'MYSIS'` | `mysis.ventas_mysis` | 1.655.181, desde 2018-05-17 | 15 min |
 | `origen = 'ERP'` | la réplica del ERP, por `postgres_fdw` | **0 hoy** | en vivo |
 
-Que la mitad del ERP esté vacía es correcto, no un fallo: las 478.475 ventas de
+Que la mitad del ERP esté vacía es correcto, no un fallo: las ventas de
 producción son migradas —`legacyRef` no nulo en el 100%— y **ninguna nació en
 el ERP**. La vista se llenará sola con el primer despacho.
 

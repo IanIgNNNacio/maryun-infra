@@ -105,8 +105,63 @@ Y el recordatorio de siempre, que en esta tubería muerde: **`docker exec`
 necesita `-i`** si le pasas algo por la entrada estándar. Sin `-i` el `COPY`
 recibe un flujo vacío y no falla, simplemente no carga nada.
 
-Última corrida medida: **2.007.602 filas en unos 12 segundos**, ventana de 48
-meses (2022-09-05 → 2026-09-05), etiqueta `corte-2026-09-05`.
+### El corte vigente es `corte-2026-anio`: sólo 2026
+
+Desde el **11-sep-2026** el ERP guarda **únicamente el año en curso**. Los cuatro
+años que tenía antes viven en el espejo, en `global.ventas`, y el ERP no los
+duplica.
+
+```bash
+bash ~/mig/aterrizar.sh '2026-10-01 00:00:00' 9 'corte-2026-anio'
+MIG_CONFIRMAR=corte-2026-anio bash ~/mig/recargar.sh --si
+```
+
+**Por qué `T` es el 1 de octubre, que todavía no ha llegado.** La ventana se
+calcula `DESDE = T − MESES meses`, y el filtro es `>= DESDE AND < T`. Para que
+`DESDE` caiga exactamente en el 1 de enero, el **día** de `T` tiene que ser 01;
+con `T` = hoy no hay ningún número de meses que dé el 1 de enero. Poniendo `T`
+tres semanas adelante, el límite superior deja de morder —MySis no tiene nada
+posterior— y la ventana queda siendo el año calendario exacto.
+
+**Y por qué no se puede empujar `T` más allá, a 2027.** `T` no es sólo el
+límite de la ventana: `10-extraer-clickhouse.sql:439` usa `toYear(T)` para
+decidir qué órdenes de compra están vivas, y `33-compras.sql` cancela las que
+no son del año del corte. Con `T` en 2027 **ninguna** OC sería del año y las
+1.780 entrarían canceladas.
+
+Antes y después, en producción:
+
+| | 48 meses | `corte-2026-anio` |
+|---|---|---|
+| Sale | 478.475 | **82.365** |
+| SaleLine | 1.275.835 | **214.327** |
+| CreditNote | 22.470 | **4.400** |
+| Receivable | 3.386 | **3.425** |
+| PurchaseOrder | 1.696 | **1.780** |
+| rango | 2022-09-05 → 2026-09-04 | **2026-01-02 → 2026-09-10** |
+| monto | $67.967 MM | **$11.774 MM** |
+
+Los maestros no llevan ventana y no cambian de tamaño por esto: Party 114.928,
+Product 7.700, ProductVariant 22.803.
+
+La cartera y las OC **suben** en vez de bajar, y no es un error: no llevan
+ventana de fechas propia —son «lo que sigue abierto»— y el corte nuevo es seis
+días más reciente.
+
+**Lo que se perdió a propósito:** 60 documentos de cartera abierta anteriores a
+2026, por $31.579.261. Decisión explícita de Ian el 11-sep-2026: sólo 2026 en el
+ERP, sin excepciones para la cartera. Esos saldos siguen consultables en MySis.
+
+Se ensayó antes en preview, que es la regla: se congela con
+`sudo touch /srv/PREVIEW-CONGELADO`, se copia el esquema `mig` de producción con
+`pg_dump -n mig`, se corre `recargar.sh --preview --si` y se descongela. Las 18
+fases salieron `ok` en los dos sitios, sin una sola clave foránea suelta.
+`aterrizar.sh` escribe siempre en producción —su `pg()` está fijo a
+`maryun-erp-db`—, y por eso el ensayo necesita ese `pg_dump` intermedio.
+
+Corridas medidas: el aterrizaje, **484.772 filas en 6 segundos**; la recarga
+completa, **1 minuto 40**. La anterior, con la ventana de 48 meses, movía
+2.007.602 filas en unos 12 segundos de aterrizaje.
 
 ---
 
