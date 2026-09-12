@@ -210,6 +210,77 @@ y `hot_standby_feedback = on`: una consulta larga contra la réplica hace que el
 **primario** retenga tuplas muertas mientras corra, así que conviene que no
 pueda correr para siempre.
 
+### La historia de MySis estaba rota antes de 2022, y se arregló
+
+Al construir el tablero del nivel 3 salió a la luz: `dwh.ventas_mysis` tenía
+sólo **27.225 líneas** entre 2018 y 2021, y no eran pocas sino **equivocadas** —
+2018 y 2019 con venta cero en todas sus filas, 2020 y 2021 con venta
+**negativa** ($-88 MM y $-803 MM). Eran notas de crédito y ajustes sueltos, sin
+las ventas que los originaron.
+
+La historia buena estaba al lado, en `dwh.ventas_mysis_prueba`. El 12-sep-2026
+se trasplantó:
+
+1. copia de seguridad de las 27.225 filas en `dwh.respaldo_ventas_pre2022_2026_09_12`
+2. `DROP PARTITION` de las 43 particiones anteriores a 2022 —metadato,
+   instantáneo, sin mutación
+3. `INSERT ... LIMIT 1 BY pid, sku` desde `ventas_mysis_prueba`, que de paso
+   quitó los 2.682 duplicados que esa tabla arrastraba
+
+De 2022 en adelante no se tocó nada: ahí las dos tablas ya coincidían hasta en
+el detalle, y `ventas_mysis` es la que está fresca.
+
+| | antes | después |
+|---|---|---|
+| líneas | 1.656.013 | **2.610.413** |
+| desde | 2018-05-17, vacío hasta 2022 | **2018-05-16, con importes** |
+| venta total | $62.050 MM | **$100.418 MM** |
+
+Por año, lo recuperado: 2018 $4.174 MM · 2019 $5.212 MM · 2020 $15.229 MM ·
+2021 $12.783 MM.
+
+**El incremental no habría traído esto nunca**, y conviene entender por qué: va
+por `ingested_at`, y estas filas llevan la marca de cuando se cargaron en la
+tabla de pruebas, anterior a la marca de agua del espejo. Después de una
+operación así hay que correr el volcado completo a mano. Es el mismo motivo por
+el que el volcado nocturno no se puede quitar.
+
+## Los tres niveles de tablero
+
+Desde el 12-sep-2026 hay tres tableros de ventas v3 en Metabase, y la diferencia
+entre ellos es **qué mitad del negocio miran**:
+
+| nivel | tablero | colección | conexión | qué muestra | hoy |
+|---|---|---|---|---|---|
+| 1 | `Ventas v3` (id 26) | 30 | 6 · réplica | sólo lo **nacido en el ERP** | $0 |
+| 2 | `Ventas v3 ERP` (id 27) | 31 | 6 · réplica | **toda la base del ERP** | $9.894 MM · 82.364 doc |
+| 3 | `Ventas v3 global` (id 28) | 32 | 5 · espejo | **toda la historia** | $100.418 MM · 929.344 doc |
+
+Los niveles 1 y 2 comparten SQL: el 1 es el 2 con `AND "Sale"."legacyRef" IS
+NULL`. El nivel 3 es otra cosa —13 consultas reescritas contra `global.ventas`,
+**sin un solo JOIN**, porque la vista ya viene plana.
+
+Que el nivel 1 marque cero es correcto, no un fallo: todavía nadie despacha
+desde el ERP.
+
+**Las cifras de los niveles 1 y 2 miden `SaleLine.total`**, o sea venta neta de
+línea. No cuadran con `SUM(Sale.total)` —$11.774 MM— porque ése es el total del
+documento con IVA. Son dos medidas distintas y las dos correctas.
+
+**El «N° documentos» del nivel 2 da 82.364 y no 82.365.** La venta `H-V-1128915`
+del 2026-02-17 no tiene ninguna línea, y el tablero se arma desde `SaleLine`. No
+se pierde plata; si algún día se le pone línea o se limpia, el contador sube
+solo.
+
+### Lo que el nivel 3 todavía no hace
+
+**No restringe por alcance.** Los dos parámetros bloqueados del embebido
+—`alcance_sucursales` y `alcance_vendedor`— viajan con **ids** de sucursal y de
+vendedor del ERP, y `global.ventas` sólo tiene **nombres**. Los tags quedan
+declarados para que el JWT no falle, pero no filtran. **No embeber el nivel 3
+para usuarios con alcance limitado** hasta que la vista exponga los ids o el ERP
+mande nombres.
+
 ### ¿Hace falta materializarla? Todavía no
 
 Medido el 11-sep-2026 sobre las 1.655.181 líneas, tiempos en caliente:
@@ -220,6 +291,10 @@ Medido el 11-sep-2026 sobre las 1.655.181 líneas, tiempos en caliente:
 | venta por sucursal, todo el histórico | 993 ms |
 | venta y margen por familia | 1.041 ms |
 | top 100 clientes | 1.074 ms |
+| recuento por origen, historia completa | 905 ms |
+
+Al recuperar la historia de 2018-2021 la tabla creció un 58%, y ese último
+barrido completo se fue de 905 ms a **1.933 ms**: justo en el umbral.
 
 Un tile de historia completa cuesta **alrededor de un segundo**; con filtro de
 fecha, la mitad. El umbral acordado para materializar es **dos segundos por
