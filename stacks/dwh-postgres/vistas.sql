@@ -85,7 +85,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA manual TO bi_lector
 -- ---------------------------------------------------------------------------
 -- 1 - Las tablas del ERP, vistas desde aqui
 --
--- Los cuatro enum del ERP se recrean AQUI con las mismas etiquetas, y no se
+-- Los enum del ERP se recrean AQUI con las mismas etiquetas, y no se
 -- declaran TEXT, que fue el primer intento. Motivo medido: postgres_fdw empuja
 -- el WHERE al servidor remoto, y alli la columna sigue siendo del enum, asi que
 -- `status <> ALL ('{DRAFT,CANCELLED}'::text[])` revienta con «operator does not
@@ -95,7 +95,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA manual TO bi_lector
 --
 -- EL PRECIO: si Prisma añade una etiqueta nueva a cualquiera de estos cuatro
 -- enum, hay que añadirla aqui tambien o la lectura de esa fila fallara. Son los
--- unicos cuatro sitios de todo el espejo que siguen al esquema del ERP.
+-- unicos sitios de todo el espejo que siguen al esquema del ERP.
 CREATE SCHEMA IF NOT EXISTS erp;
 
 DO $enum$ BEGIN
@@ -107,6 +107,12 @@ DO $enum$ BEGIN
   END IF;
   IF to_regtype('public."Origin"') IS NULL THEN
     CREATE TYPE public."Origin" AS ENUM ('NACIONAL','IMPORTADO');
+  END IF;
+  IF to_regtype('public."ReceivableStatus"') IS NULL THEN
+    CREATE TYPE public."ReceivableStatus" AS ENUM ('OPEN','PARTIAL','PAID','OVERDUE','CANCELLED');
+  END IF;
+  IF to_regtype('public."ReceivableKind"') IS NULL THEN
+    CREATE TYPE public."ReceivableKind" AS ENUM ('SALE','MANUAL','DEBIT_NOTE');
   END IF;
   IF to_regtype('public."StockMoveType"') IS NULL THEN
     CREATE TYPE public."StockMoveType" AS ENUM ('RECEIPT','ISSUE','ADJUSTMENT',
@@ -120,7 +126,8 @@ END $enum$;
 DROP FOREIGN TABLE IF EXISTS
   erp."Sale", erp."SaleLine", erp."Party", erp."ProductVariant", erp."Product",
   erp."ProductFamily", erp."Brand", erp."ProductType", erp."Branch", erp."User",
-  erp."Delivery", erp."StockMovement" CASCADE;
+  erp."Delivery", erp."StockMovement",
+  erp."Receivable", erp."InventoryItem", erp."Warehouse" CASCADE;
 
 CREATE FOREIGN TABLE erp."Sale" (
   id text, number text, "customerId" text, "salespersonId" text,
@@ -164,6 +171,26 @@ CREATE FOREIGN TABLE erp."StockMovement" (
   id text, "variantId" text, type public."StockMoveType", qty numeric(18,4),
   "totalCost" numeric(18,2), "refType" text, "refId" text
 ) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'StockMovement');
+
+-- Las tres que necesita el resumen gerencial: cartera para el aging, inventario
+-- para el stock valorizado, y bodegas para nombrarlo.
+CREATE FOREIGN TABLE erp."Receivable" (
+  id text, "customerId" text, "saleId" text,
+  amount numeric(18,2), "paidAmount" numeric(18,2), "openAmount" numeric(18,2),
+  "dueDate" timestamp, "issueDate" timestamp, "createdAt" timestamp,
+  status public."ReceivableStatus", kind public."ReceivableKind",
+  "branchId" text, folio bigint, "uncollectibleAt" timestamp, "legacyRef" text
+) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'Receivable');
+
+CREATE FOREIGN TABLE erp."InventoryItem" (
+  id text, "variantId" text, "warehouseId" text,
+  "qtyOnHand" numeric(18,4), "qtyReserved" numeric(18,4), "qtyHeld" numeric(18,4),
+  "avgCost" numeric(18,4), "inventoryValue" numeric(18,2), "lastCost" numeric(18,4)
+) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'InventoryItem');
+
+CREATE FOREIGN TABLE erp."Warehouse" (
+  id text, "branchId" text, code text, name text, active boolean, "isVirtual" boolean
+) SERVER erp_replica OPTIONS (schema_name 'public', table_name 'Warehouse');
 
 -- ---------------------------------------------------------------------------
 -- 2 - Indices sobre ventas_mysis
