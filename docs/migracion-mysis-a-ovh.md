@@ -367,6 +367,106 @@ y mirar el rendimiento. Nada de esto se mezcla con la mudanza.
 
 ---
 
+## 7 bis · La lentitud: medida, con un experimento
+
+Ian dice que «a veces es lento». Se midió el 18-sep-2026 con la máquina libre.
+**La mudanza sola arregla la mayor parte, y hay un número que lo demuestra.**
+
+### El experimento
+
+`innodb_buffer_pool_size` es dinámico en MariaDB 10.6, así que se subió de
+128 MB a 5 GB **en caliente**, se cronometró y se devolvió, sin reiniciar nada:
+
+| página | con 128 MB | con 5 GB | |
+|---|---|---|---|
+| `pages/report/cargador.php` | **154-158 s** | **5-8 s** | ~25× |
+| `pages/report/datapie.php` | 5,01 s | 0,62 s | 8× |
+| `pages/report/vtas2.php` | 5,28 s | 1,01 s | 5× |
+
+### Por qué
+
+El pool son **128 MB para una base de 10,5 GB** —el 1,2 %—, y con
+`innodb_flush_method = O_DIRECT` los 14 GB de RAM libre **no ayudan**, porque
+InnoDB se salta la caché del sistema operativo. La única caché real son esos
+128 MB.
+
+El resultado, medido: **3,85 TB leídos de disco en 27 horas** para servir una
+base de 10,5 GB. La base entera se relee del disco unas **385 veces al día**.
+Tasa de acierto del pool: 87,3 %, cuando un OLTP sano está por encima del 99,9 %.
+
+### Y qué NO es lento, que importa igual
+
+La primera hipótesis fue «las páginas que tocan tablas grandes van lentas». **Es
+falsa, y el escéptico la corrigió midiendo.** La aplicación consulta esas tablas
+**por índice**, y eso cuesta 8-15 ms aunque la tabla pese 2,9 GB:
+
+```
+mstr_pedidos_aux WHERE pid=…             8,1 / 9,0 / 8,8 ms
+tab_clientes_actividades_txt WHERE rut   9,0 / 9,1 / 8,9 ms
+tab_clientes_actividad WHERE rut         9,1 / 15,9 / 9,8 ms
+```
+
+El eje correcto **no es tabla grande contra tabla pequeña: es agregación contra
+búsqueda por índice**. Todo lo transaccional está entre 0,4 ms y 140 ms. Lo único
+lento son las páginas de `pages/report/*`, que agregan millones de filas.
+
+Cuando alguien dice «está lento», está hablando de un informe.
+
+### Y algo que es culpa nuestra
+
+Un cliente ODBC por el usuario `appread` —o sea **nuestro propio ETL de Mage, por
+el túnel**— lanza cada 4-5 minutos un informe de 51 tablas con 10 subconsultas
+correlacionadas que tarda **105 segundos** y devuelve 113 filas. Satura el disco
+al 88-94 % durante 2 min 23 s, unas 156 veces al día, **las 24 horas, incluso a
+las 3 de la madrugada**.
+
+Eso es lo que produce la mayor parte de esos 3,85 TB. Es nuestro, y se puede
+arreglar sin tocar MySis: o bajar la frecuencia, o arreglar la consulta.
+
+### Lo que NO explica la lentitud, descartado con dato
+
+- **No es PHP.** Cero «Maximum execution time exceeded», cero «Allowed memory
+  size exhausted» en dos días de registro. OPcache activo y sano.
+- **No es la CPU.** Nunca pasa del 5 % de usuario.
+- **No es MyISAM.** No hay ni una tabla MyISAM.
+- **No son los 943.720 archivos.** Ningún código los lista.
+- **No es bloqueo.** Cero esperas de fila, cero semáforos, `History list` en 0.
+  Es 100 % lectura: 0,00 escrituras/s.
+
+### Lo que queda por hacer aunque se mude
+
+`cargador.php` pasa de 154 s a 5-8 s con la mudanza. **Pero 5-8 segundos para una
+página sigue siendo un fallo de consulta, no de hierro.** Merece un `EXPLAIN`
+antes de darlo por resuelto. Es fase 5.
+
+---
+
+## 7 ter · Una segunda puerta abierta, peor que la de REPO
+
+Al cronometrar las páginas salió esto, y no se buscaba:
+
+**El control de sesión de MySis es sólo un redirect de JavaScript en el cliente.**
+Las páginas devuelven
+
+```html
+<script>window.location.href="/mryn/pages/login.php";</script>
+```
+
+**y a continuación ejecutan el PHP y entregan los datos igual.** Comprobado sin
+sesión alguna: `skuget.php` devolvió `{"count":"19211"}` y `caja.php` devolvió
+70 KB de HTML con el título «VENTAS | FACTURACION».
+
+Cualquiera que alcance el servidor y ignore el JavaScript lee los datos. Y hay
+**1.307 IP distintas** llegando en 14 días contra ~110 usuarios reales.
+
+Esto **decide** la pregunta de si MySis se publica o queda tras la VPN: **tras la
+VPN**, hasta que la autenticación se compruebe en el servidor. Arreglarla de
+verdad es un `require` de guardia al principio de cada página, y es un trabajo
+aparte — pero mientras tanto, la red es lo único que separa los datos de
+cualquiera.
+
+---
+
 ## 8 · Lo que puede salir mal
 
 **Perder documentos tributarios.** ~222.900 PDF anteriores a 2022 no tienen token

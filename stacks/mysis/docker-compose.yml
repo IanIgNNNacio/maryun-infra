@@ -107,16 +107,37 @@ services:
 
     command:
       - "mariadbd"
-      # En Azure `innodb_buffer_pool_size` está en el DEFAULT de 128 MB para
-      # 12 GiB de datos: el motor vive de la caché de página del sistema. Con un
-      # buffer pool de verdad, MySis va a ir MÁS RÁPIDO aquí que allá, sin tocar
-      # una sola consulta.
+      # ESTE ES EL CAMBIO QUE MÁS SE VA A NOTAR DE TODA LA MUDANZA, y no es
+      # una suposición: se midió con un A/B en caliente sobre la propia máquina
+      # de Azure el 18-sep-2026 (el pool es dinámico en MariaDB 10.6, así que se
+      # subió a 5 GB, se cronometró y se devolvió a 128 MB sin reiniciar nada).
       #
-      # Y hay que subirlo ANTES de restaurar el dump: cargar 7,8 GB de SQL en
-      # InnoDB con 128 MB de pool es la diferencia entre media hora y dos.
-      - "--innodb-buffer-pool-size=4G"
-      - "--innodb-log-file-size=512M"
-      - "--max-connections=200"
+      #   pages/report/cargador.php   154-158 s  ->  5-8 s     (~25x)
+      #   pages/report/datapie.php       5,01 s  ->  0,62 s     (8x)
+      #   pages/report/vtas2.php         5,28 s  ->  1,01 s     (5x)
+      #
+      # La causa: allá el pool son 128 MB para una base de 10,5 GB —el 1,2 %—, y
+      # con `innodb_flush_method=O_DIRECT` los 14 GB de RAM libre NO ayudan,
+      # porque InnoDB se salta la caché del sistema. La única caché real son esos
+      # 128 MB. Resultado medido: **3,85 TB leídos de disco en 27 horas** para
+      # servir 10,5 GB. La base entera se relee del disco unas 385 veces al día.
+      #
+      # 12G y no 4G: la base completa son 12 GiB en disco y cabe entera. Es el
+      # 19 % de los 62 GiB de la máquina.
+      #
+      # Y hay que ponerlo ANTES de restaurar el dump: cargar 7,8 GB de SQL con
+      # 128 MB de pool es la diferencia entre media hora y dos.
+      - "--innodb-buffer-pool-size=12G"
+      # Con un pool de ese tamaño, repartirlo evita la contención del mutex.
+      - "--innodb-buffer-pool-instances=8"
+      - "--innodb-log-file-size=2G"
+      # El 200 por defecto es de disco mecánico y esta máquina tiene NVMe.
+      - "--innodb-io-capacity=2000"
+      - "--innodb-io-capacity-max=8000"
+      # En Azure son 151 contra los 150 MaxRequestWorkers de Apache: margen cero.
+      # Hoy no duele —el máximo histórico son 11 conexiones— pero es una bomba
+      # de relojería en un pico.
+      - "--max-connections=400"
       # Las 168 tablas son InnoDB —cero MyISAM, cero Aria—, así que la
       # restauración es limpia. Pero 163 de ellas son latin1_spanish_ci y el
       # servidor de Azure anuncia utf8mb4 mientras el cliente negocia utf8mb3,
@@ -141,7 +162,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6G
+          memory: 16G
 
     logging:
       driver: json-file
