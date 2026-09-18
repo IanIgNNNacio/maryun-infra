@@ -1,0 +1,160 @@
+name: mysis
+
+# MySis en maryun01 — el sistema con el que la empresa factura.
+#
+# Viene de una VM de Azure de 4 núcleos y 15 GB que costaba cara y no usaba nada
+# de eso: medido en horario laboral, 1.121 MB de RAM para la máquina entera,
+# MariaDB 467 MB, Apache 158 MB en ocho procesos y carga 0,81 sobre 4 núcleos.
+# Los 15 GB eran, casi todos, caché de página para los 123 GiB de REPO — y REPO
+# se va a R2, así que aquí ni siquiera hace falta esa caché.
+#
+# Detalle completo del relevamiento y del corte en
+# maryun-infra/docs/migracion-mysis-a-ovh.md.
+#
+# ESTE ARCHIVO NO ESTÁ DESPLEGADO TODAVÍA. Es la fase 2 del plan: montar en
+# paralelo mientras Azure sigue facturando, y no cortar hasta haber probado.
+
+services:
+  mysis-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: maryun/mysis-php:7.4.33
+    container_name: mysis-web
+    restart: unless-stopped
+
+    environment:
+      TZ: America/Santiago
+
+    # Sólo a la VPN, como todo lo que no publica Coolify. Traefik le llega por
+    # aquí y termina el TLS; la ruta va en vpn-hosts.yaml con `poner-ruta-traefik.py`.
+    #
+    # 8096 está libre: 8088, 8090, 8095 y 8123 ya están tomados.
+    ports:
+      - "10.8.0.1:8096:80"
+
+    volumes:
+      # La aplicación vive en el anfitrión y se monta. Un despliegue es un
+      # `git pull` sobre esta ruta, no una reconstrucción de imagen.
+      #
+      # OJO CON LOS PERMISOS: en Azure el árbol entero está en 777 y es de
+      # www-data. Aquí se monta con el dueño correcto y se deja de escribir
+      # dentro del árbol de código — que es lo que obligaba a ese 777.
+      - /srv/stacks/mysis/html:/var/www/html
+      # Los directorios de datos que NO se van a R2 en la primera fase.
+      # `pages/rendicion`, `pages/mail` y `pages/solicitud` sí van, pero hasta
+      # que el cambio de código esté probado se sirven de aquí.
+      - /srv/stacks/mysis/datos:/var/www/html/mryn/_datos
+
+    # NO va read_only: la aplicación escribe dentro de su propio árbol -es lo
+    # que hace hoy- y arreglar eso es parte del cambio de R2, no de la mudanza.
+    # Cuando REPO y los uploads estén fuera, esto pasa a `read_only: true` con
+    # tmpfs para /tmp, como el resto de los stacks.
+
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      # login.php es la única página que responde sin sesión y que toca la base:
+      # si MariaDB no está, devuelve error y el healthcheck se entera. Un
+      # fichero estático no probaría nada.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1/mryn/pages/login.php || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    depends_on:
+      mysis-db:
+        condition: service_healthy
+
+    deploy:
+      resources:
+        limits:
+          # Generoso a propósito y aun así holgado: en Azure los ocho procesos
+          # de Apache sumaban 158 MB. 8 GB deja sitio para que una página de
+          # reportes se desmande sin tocar al vecino.
+          memory: 8G
+
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+    networks: [mysis, data]
+
+  mysis-db:
+    # 10.6 es lo que corre en Azure y lo que se restaura, así que la mudanza va
+    # con la misma versión. AVISO: MariaDB 10.6 llegó a fin de vida en julio de
+    # 2026 — ya. Subir a 10.11 LTS es directo, y es fase 5: después de la
+    # mudanza, no durante.
+    image: mariadb:10.6.23
+    container_name: mysis-db
+    restart: unless-stopped
+
+    environment:
+      TZ: America/Santiago
+    env_file:
+      - /srv/secrets/mysis-db.env
+
+    # Sólo por la VPN, y en un puerto que no choca: 3306 lo usa el túnel a Azure
+    # como 3307, y mientras convivan hacen falta los dos.
+    ports:
+      - "10.8.0.1:3308:3306"
+
+    volumes:
+      - /srv/stacks/mysis/db:/var/lib/mysql
+      - /srv/stacks/mysis/my.cnf:/etc/mysql/conf.d/maryun.cnf:ro
+
+    command:
+      - "mariadbd"
+      # En Azure `innodb_buffer_pool_size` está en el DEFAULT de 128 MB para
+      # 12 GiB de datos: el motor vive de la caché de página del sistema. Con un
+      # buffer pool de verdad, MySis va a ir MÁS RÁPIDO aquí que allá, sin tocar
+      # una sola consulta.
+      #
+      # Y hay que subirlo ANTES de restaurar el dump: cargar 7,8 GB de SQL en
+      # InnoDB con 128 MB de pool es la diferencia entre media hora y dos.
+      - "--innodb-buffer-pool-size=4G"
+      - "--innodb-log-file-size=512M"
+      - "--max-connections=200"
+      # Las 168 tablas son InnoDB —cero MyISAM, cero Aria—, así que la
+      # restauración es limpia. Pero 163 de ellas son latin1_spanish_ci y el
+      # servidor de Azure anuncia utf8mb4 mientras el cliente negocia utf8mb3,
+      # con `mysqli_set_charset` COMENTADO en conectar.php. Funciona hoy porque
+      # las dos puntas coinciden por accidente. Aquí se fija lo mismo
+      # EXPLÍCITAMENTE para que siga coincidiendo; si no, los acentos se
+      # corrompen en silencio y sólo se descubre mirando datos viejos.
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_general_ci"
+      # Azure lo tiene apagado y por eso no hay historial de consultas. Aquí se
+      # deja apagado también para no cambiar dos cosas a la vez; se enciende
+      # cuando toque mirar el rendimiento, que es la fase 5.
+      - "--slow-query-log=0"
+
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+    networks: [mysis, data]
+
+networks:
+  # Red propia para que web y base se hablen sin pasar por la común.
+  mysis:
+    name: mysis
+  # Y la compartida, porque Mage tiene que alcanzar esta base para los ETL —hoy
+  # lo hace por el túnel SSH a Azure, y después del corte lo hará por aquí.
+  data:
+    name: data
+    external: true
