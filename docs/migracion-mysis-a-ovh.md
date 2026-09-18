@@ -292,12 +292,31 @@ MyISAM—, y no hay triggers, vistas ni eventos. Un solo procedimiento almacenad
 
 ## 7 · El plan
 
-### Fase 0 · Ya hecho (18-sep-2026)
+### Fase 0 · Hecho y verificado (18-sep-2026)
 
 - Acceso por `/srv/bin/mysis-ssh.sh`, con la misma clave del túnel.
 - Código actualizado y verificado por md5 en los tres puntos.
 - rclone instalado en la VM.
-- **Subida de los 943.720 archivos a R2 en marcha**, a ~311 archivos/s.
+- **Los 976.859 archivos están en R2**, y comprobados **por hash**.
+
+| directorio | en disco | en R2 | tamaño |
+|---|---|---|---|
+| `REPO` | 943.720 | **943.720** | 123,01 GiB |
+| `pages/rendicion` | 8.917 | **8.917** | 6,02 GiB |
+| `pages/mail` | 100 | **100** | 5,97 GiB |
+| `pages/solicitud` | 5.485 | **5.485** | 674,8 MiB |
+| `pages/salidas_excel` | 18.637 | **18.637** | 107,5 MiB |
+
+**Subida: 1 h 19 min** (11:57 → 13:16), a ~311 archivos/s sostenidos, **cero
+errores**. **Verificación por hash: 13 min 30 s**, con **0 faltantes y 0
+diferencias** en los cinco directorios.
+
+Total: **976.859 objetos, ~135,8 GiB**.
+
+Queda dicho para quien repita esto: la verificación por hash lee los 123 GiB
+locales y llevó la VM a **carga 32 sobre 4 núcleos**. Un sábado sin nadie está
+bien; un lunes no. Para repetirla en horario está `--rapido`, que compara sólo
+tamaños.
 
 ### Fase 1 · Antes de tocar nada
 
