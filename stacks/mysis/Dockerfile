@@ -25,6 +25,12 @@ FROM php:7.4.33-apache-bullseye
 # que el problema sea la EDAD de la distribucion. Costo un intento
 # averiguarlo.
 #
+# Y SOLO el repositorio principal: para bullseye la rama de seguridad se llama
+# `bullseye-security`, no `bullseye/updates` -esa era la nomenclatura de buster
+# hacia atras-, y archive.debian.org no la publica. Pedirla da
+# «does not have a Release file» y tumba la construccion entera. Todo lo que
+# hace falta aqui esta en main.
+#
 # `Check-Valid-Until false` hace falta porque los indices del archivo llevan
 # la fecha de caducidad pasada y apt se niega a usarlos aunque los descargue.
 #
@@ -33,22 +39,39 @@ FROM php:7.4.33-apache-bullseye
 # porque el contenedor no se expone a internet -va detras de la VPN- y porque
 # es temporal, pero es la razon numero uno para que la fase 5 no se quede en
 # el cajon.
+# `libssl-dev` no es para gd ni para intl: es para `ftp`. Esa extension lleva
+# soporte TLS y sin las cabeceras de OpenSSL la compilacion muere con un
+# «compilation terminated» en ftp.lo que no menciona OpenSSL por ninguna parte.
+# Se descubrio compilando las diecisiete una por una; las otras dieciseis
+# pasaban.
+# NO SE PURGAN LOS PAQUETES -dev AL TERMINAR, y no es descuido.
+#
+# El primer intento hacia apt-get purge --auto-remove de las cabeceras, que
+# es el idioma habitual para adelgazar la imagen. El resultado: gd, xsl y zip
+# COMPILARON BIEN y luego NO CARGABAN, porque --auto-remove se llevo tambien
+# las bibliotecas de EJECUCION: libpng16.so.16, libexslt.so.0, libzip.so.4.
+# apt no sabe que una extension de PHP depende de ellas, porque el enlace es
+# en tiempo de ejecucion y no una dependencia declarada.
+#
+# El fallo NO aparece al construir. Aparece al arrancar, en el registro, como
+# «Unable to load dynamic library», y la aplicacion sigue en pie SIN gd -los
+# timbres del SII-, SIN zip -las salidas a Excel- y SIN xsl.
+#
+# Cuestan unos 80 MB de imagen. Se quedan.
 RUN set -eux; \
     echo 'deb http://archive.debian.org/debian bullseye main' > /etc/apt/sources.list; \
-    echo 'deb http://archive.debian.org/debian-security bullseye/updates main' >> /etc/apt/sources.list; \
     echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archivo; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         libfreetype6-dev libjpeg62-turbo-dev libpng-dev \
         libicu-dev libxml2-dev libxslt1-dev libzip-dev \
+        libssl-dev \
         ; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" \
         gd intl mysqli pdo_mysql xsl zip exif sockets calendar \
         pcntl shmop sysvmsg sysvsem sysvshm ftp gettext opcache \
         ; \
-    apt-get purge -y --auto-remove libfreetype6-dev libjpeg62-turbo-dev \
-        libpng-dev libicu-dev libxml2-dev libxslt1-dev libzip-dev; \
     rm -rf /var/lib/apt/lists/*
 
 # Los modulos de Apache que produccion tiene cargados vienen todos activos en

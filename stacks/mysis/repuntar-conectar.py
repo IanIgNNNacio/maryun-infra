@@ -20,8 +20,14 @@ QUE NO TOCA:
     aplicacion es lo correcto y es lo PRIMERO de la fase 5, pero mezclarlo con
     la mudanza significa que si algo falla no se sabe cual de las dos cosas fue.
 
-Deja un .bak-ovh por archivo. Idempotente: correrlo dos veces no hace nada la
-segunda.
+Deja un respaldo por archivo en /srv/stacks/mysis/respaldos-conectar, FUERA
+del arbol que sirve Apache. La primera version los dejaba al lado, como
+conectar.php.bak-ovh, y eso resulto ser un agujero: Apache no ejecuta un
+archivo que no termine en .php, asi que lo servia EN CLARO. Comprobado -HTTP
+200, 750 bytes, con la credencial dentro-. Un respaldo de un archivo de
+conexion no puede vivir donde lo alcanza un navegador.
+
+Idempotente: correrlo dos veces no hace nada la segunda.
 """
 import os
 import re
@@ -29,6 +35,7 @@ import sys
 
 RAIZ = '/srv/stacks/mysis/html'
 ENV = '/srv/secrets/mysis-db.env'
+RESPALDOS = '/srv/stacks/mysis/respaldos-conectar'
 HAZLO = '--hazlo' in sys.argv
 
 clave = None
@@ -74,10 +81,12 @@ for base, _, archivos in os.walk(RAIZ):
         tocados.append(rel)
         cambiados += 1
         if HAZLO:
-            respaldo = ruta + '.bak-ovh'
+            os.makedirs(RESPALDOS, exist_ok=True)
+            respaldo = os.path.join(RESPALDOS, rel.replace(os.sep, '_'))
             if not os.path.exists(respaldo):
                 with open(respaldo, 'w', encoding='utf-8', errors='surrogateescape') as f:
                     f.write(original)
+                os.chmod(respaldo, 0o600)
             with open(ruta, 'w', encoding='utf-8', errors='surrogateescape') as f:
                 f.write(nuevo)
 
