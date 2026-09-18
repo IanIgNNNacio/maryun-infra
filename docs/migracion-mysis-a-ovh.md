@@ -305,6 +305,36 @@ MyISAM—, y no hay triggers, vistas ni eventos. Un solo procedimiento almacenad
 - Inventariar los webhooks **entrantes** y quién usa el FTP.
 - Decidir el nombre DNS y si MySis se publica o queda tras la VPN.
 
+### Fase 1 · lo que ya está averiguado (18-sep-2026)
+
+**Webhooks entrantes: hay UNO.** Sobre 14 días de registros, el único `POST` que
+llega de un tercero es:
+
+```
+98  34.122.156.0  ->  /mryn/HOOKS/hook_simpliroute_checkout.php
+```
+
+`34.122.156.0` es Google Cloud, que es donde corre Simpliroute. Todo lo demás
+que parecía webhook son las llamadas AJAX de las propias pantallas —88.892 a
+`autocompletaSKU.php`, 29.977 a `Get_tramo.php`— y un puñado de rastreadores
+picando `/api/auth` y `/api/graphql`, que ni siquiera existen en MySis.
+
+**Y los otros hooks están muertos.** `HOOKS/orders_events.php` y `oc_events.php`
+—los de Shopify, los que apuntan al Linode difunto `45.33.16.82`— reciben
+**cero** peticiones. O Shopify ya no los llama, o los llama a la IP muerta y
+nadie se ha enterado. Conviene comprobarlo en el panel de Shopify antes del
+corte, no después.
+
+Así que repuntar webhooks es **una sola URL**, no un inventario.
+
+**FTP: prácticamente sin uso.** `vsftpd` tiene `write_enable=YES` y dos
+menciones en `syslog`. Antes de no reproducirlo hay que preguntar, pero no
+parece sostener nada vivo.
+
+**1.307 IP distintas en 14 días**, contra ~110 usuarios diarios. La diferencia
+son rastreadores: es lo que pasa con un servicio publicado en una IP desnuda sin
+nombre ni TLS.
+
 ### Fase 2 · Montar en paralelo, sin cortar nada
 
 - `/srv/stacks/mysis/` con las dos imágenes, la base restaurada de un dump, y el
