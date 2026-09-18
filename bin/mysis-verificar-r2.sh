@@ -18,6 +18,20 @@
 # contenido, porque un objeto puede existir en R2 con cero bytes o truncado y el
 # recuento seguiría cuadrando.
 #
+# ── LO QUE CUESTA, medido el 18-sep-2026 ────────────────────────────────────
+#
+# `--checksum` calcula el MD5 de CADA ARCHIVO LOCAL, o sea que lee los 123 GiB
+# enteros del disco. Con 64 comparadores en paralelo sobre un directorio plano
+# de 943.720 entradas, la máquina de Azure subió a **carga 32 sobre 4 núcleos**.
+#
+# Eso está bien un sábado sin nadie dentro. NO SE CORRE UN LUNES.
+#
+# Para repetirla en horario —y hay que repetirla después del corte, porque
+# entrarán archivos nuevos— usa `--rapido`, que compara sólo tamaños y no lee un
+# solo byte. Es menos seguro, pero detecta igual lo que de verdad pasa: objetos
+# que faltan y objetos truncados. La comprobación por hash completa se hace una
+# vez, la primera, que es ésta.
+#
 # ── Por qué se puede comparar por hash ──────────────────────────────────────
 #
 # Ningún archivo de REPO pasa de 1 MB, así que todos subieron en una sola pieza
